@@ -1,121 +1,236 @@
-import { AlertTriangle, Check, Copy, ExternalLink, Eye, EyeOff, Loader2, Puzzle, RotateCw, Sparkles } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink, Eye, EyeOff, Loader2, Puzzle, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { postJson, useApi, type CaptureLog, type CapturedThread, type Extraction, type RwgStatus } from "../api";
-import { ErrorNote, PageLoading, SectionHead } from "../components/ui";
+import { Chip, ErrorNote, PageLoading, SectionHead } from "../components/ui";
 import { ago, cx, fmtDate } from "../lib/format";
+
+const SOURCES = [
+  ["all", "All"],
+  ["capture", "My captures"],
+  ["reddit", "Reddit"],
+  ["rwg", "RWG"],
+  ["telegram", "Telegram"],
+] as const;
+const STATUSES = [
+  ["new", "Not analysed"],
+  ["queued", "Queued"],
+  ["analysed", "Analysed"],
+  ["stale", "New pages since analysis"],
+  ["failed", "Failed"],
+  ["all", "Any status"],
+] as const;
+const key = (t: CapturedThread) => `${t.source_id}\u0000${t.thread_id}`;
 
 export default function Captures() {
   const [nonce, setNonce] = useState(0);
-  const { data, error } = useApi<{ threads: CapturedThread[]; log: CaptureLog[] }>(`captures?n=${nonce}`);
+  const [source, setSource] = useState("all");
+  const [status, setStatus] = useState("new");
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState<Record<string, CapturedThread>>({});
+  const query = `captures?source=${source}&status=${status}&q=${encodeURIComponent(q)}&limit=100&n=${nonce}`;
+  const { data, error } = useApi<{ threads: CapturedThread[]; total: number; log: CaptureLog[] }>(query);
   const { data: ex } = useApi<Extraction>(`extraction?n=${nonce}`);
   if (error) return <ErrorNote error={error} />;
-  if (!data) return <PageLoading />;
   const now = new Date().toISOString();
   const refresh = () => setNonce((n) => n + 1);
+  const selected = Object.values(picked);
+  const total = selected.reduce((sum, t) => sum + t.estimate_usd, 0);
+  const queue = (items: CapturedThread[]) =>
+    postJson("analyse", { items: items.map((t) => [t.source_id, t.thread_id]) }).then(() => {
+      setPicked({});
+      refresh();
+    });
 
   return (
     <div className="mx-auto max-w-[1360px] px-4 md:px-10">
-      <header className="pb-10 pt-14">
-        <div className="eyebrow mb-4">RWI · Reddit · Telegram</div>
+      <header className="pb-8 pt-14">
+        <div className="eyebrow mb-4">RWI · Reddit · RWG · Telegram</div>
         <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">Captures</h1>
         <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
-          RWI and Reddit pages you sent with the Chrome extension, and the Telegram channels you follow. Claude reads each thread and turns it into findings that feed the scores — only the conclusion and a link to the
-          source are kept on the site.
+          Everything collected, waiting for your decision. Nothing is sent to Claude until you pick it — only the conclusion and a link to the source end up on the site.
         </p>
         {ex && !ex.configured && (
           <div className="mt-6 flex max-w-2xl items-start gap-3 rounded-xl border border-warn/30 bg-warn/[0.06] px-4 py-3 text-sm text-warn">
             <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-            Analysis is paused: add your Anthropic API key under Settings → Apps → Rep Index → Configuration.
+            Add your Anthropic API key under Settings → Apps → Rep Index → Configuration to analyse anything.
           </div>
         )}
+        {ex?.auto && <p className="mt-4 text-sm text-warn">Auto-analysis is on in the app options — new material is analysed without asking.</p>}
       </header>
 
       <div className="grid gap-12 lg:grid-cols-[1fr_380px]">
         <section>
-          <SectionHead
-            eyebrow={`${data.threads.length} threads${ex?.configured ? ` · ${ex.model}` : ""}`}
-            title="Analysed sources"
-            action={
-              <button onClick={refresh} className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-paper">
-                <RotateCw size={13} /> Refresh
-              </button>
-            }
-          />
-          {!data.threads.length && <p className="text-sm text-muted">Nothing yet — open an RWI thread and click the extension’s button.</p>}
-          <ul>
-            {data.threads.map((t) => (
-              <ThreadRow key={`${t.source_id}/${t.thread_id}`} t={t} now={now} busy={ex?.busy === t.thread_id} onQueued={refresh} />
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {SOURCES.map(([k, label]) => (
+              <Chip key={k} active={source === k} onClick={() => (setSource(k), setPicked({}))}>
+                {label}
+              </Chip>
             ))}
-          </ul>
+          </div>
+          <div className="mb-4 flex flex-wrap items-center gap-1.5">
+            {STATUSES.map(([k, label]) => (
+              <Chip key={k} active={status === k} onClick={() => (setStatus(k), setPicked({}))}>
+                {label}
+              </Chip>
+            ))}
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search titles…" className="ml-auto w-48 rounded-full border border-line bg-panel px-3 py-1 text-[13px] outline-none" />
+          </div>
+
+          <div className="sticky top-16 z-20 mb-2 flex items-center gap-3 border-y border-line bg-ink/90 py-2.5 text-sm backdrop-blur">
+            <span className="text-muted">
+              {data ? `${data.total.toLocaleString()} match${data.total === 1 ? "" : "es"}` : "…"}
+              {selected.length > 0 && ` · ${selected.length} selected`}
+            </span>
+            {data && data.threads.some((t) => !t.analyse_requested) && (
+              <button
+                onClick={() => setPicked(Object.fromEntries(data.threads.filter((t) => !t.analyse_requested).map((t) => [key(t), t])))}
+                className="text-xs text-muted hover:text-paper"
+              >
+                Select all shown
+              </button>
+            )}
+            {selected.length > 0 && (
+              <>
+                <button onClick={() => setPicked({})} className="text-xs text-muted hover:text-paper">
+                  Clear
+                </button>
+                <button onClick={() => queue(selected)} className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-paper px-4 py-1.5 text-sm font-medium text-ink">
+                  <Sparkles size={13} /> Analyse {selected.length} · ~${total.toFixed(2)}
+                </button>
+              </>
+            )}
+          </div>
+
+          {!data ? (
+            <PageLoading />
+          ) : !data.threads.length ? (
+            <p className="py-10 text-sm text-muted">Nothing here.</p>
+          ) : (
+            <ul>
+              {data.threads.map((t) => (
+                <ThreadRow
+                  key={key(t)}
+                  t={t}
+                  now={now}
+                  busy={ex?.busy === t.thread_id}
+                  picked={!!picked[key(t)]}
+                  onPick={(on) => setPicked((p) => (on ? { ...p, [key(t)]: t } : Object.fromEntries(Object.entries(p).filter(([k]) => k !== key(t)))))}
+                  onQueue={() => queue([t])}
+                  onCancel={() => postJson("analyse/cancel", { items: [[t.source_id, t.thread_id]] }).then(refresh)}
+                />
+              ))}
+            </ul>
+          )}
+          {data && data.total > data.threads.length && <p className="mt-4 text-xs text-faint">Showing the 100 most recent — narrow it down with the filters or search.</p>}
         </section>
 
         <aside className="space-y-10">
           {ex && <Budget ex={ex} />}
           <RwgCard nonce={nonce} onChange={refresh} />
           <Setup />
-          <div>
-            <SectionHead eyebrow="Last 50" title="Log" />
-            <ul className="space-y-2 text-[12.5px]">
-              {data.log.map((l) => (
-                <li key={l.id} className="flex justify-between gap-3 text-muted">
-                  <span className="truncate">
-                    #{l.thread_id} · p{l.page}
-                  </span>
-                  <span className="tnum shrink-0">
-                    +{l.new_posts} posts · {fmtDate(l.captured_at)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {data && (
+            <div>
+              <SectionHead eyebrow="Last 50" title="Capture log" />
+              <ul className="space-y-2 text-[12.5px]">
+                {data.log.map((l) => (
+                  <li key={l.id} className="flex justify-between gap-3 text-muted">
+                    <span className="truncate">
+                      #{l.thread_id} · p{l.page}
+                    </span>
+                    <span className="tnum shrink-0">
+                      +{l.new_posts} posts · {fmtDate(l.captured_at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </aside>
       </div>
     </div>
   );
 }
 
-function ThreadRow({ t, now, busy, onQueued }: { t: CapturedThread; now: string; busy: boolean; onQueued: () => void }) {
+function ThreadRow({
+  t,
+  now,
+  busy,
+  picked,
+  onPick,
+  onQueue,
+  onCancel,
+}: {
+  t: CapturedThread;
+  now: string;
+  busy: boolean;
+  picked: boolean;
+  onPick: (on: boolean) => void;
+  onQueue: () => void;
+  onCancel: () => void;
+}) {
   const builds: string[] = t.builds ? JSON.parse(t.builds) : [];
-  const stale = !t.extracted_at || t.extracted_at < t.last_captured;
+  const stale = !!t.extracted_at && t.extracted_at < t.last_captured;
   const status = busy
     ? { label: "Analysing…", tone: "text-gold border-gold/40", icon: <Loader2 size={11} className="animate-spin" /> }
-    : t.extract_error
-      ? { label: "Failed", tone: "text-bad border-bad/30", icon: <AlertTriangle size={11} /> }
-      : stale
-        ? { label: "Queued", tone: "text-muted border-line", icon: null }
-        : { label: "Analysed", tone: "text-good border-good/30", icon: <Sparkles size={11} /> };
+    : t.analyse_requested
+      ? { label: "Queued", tone: "text-gold border-gold/30", icon: null }
+      : t.extract_error
+        ? { label: "Failed", tone: "text-bad border-bad/30", icon: <AlertTriangle size={11} /> }
+        : !t.extracted_at
+          ? { label: "Not analysed", tone: "text-muted border-line", icon: null }
+          : stale
+            ? { label: "New pages", tone: "text-warn border-warn/30", icon: null }
+            : { label: "Analysed", tone: "text-good border-good/30", icon: <Sparkles size={11} /> };
+  const kind = t.source_kind === "telegram" ? "Telegram channel" : t.source_kind === "reddit" ? t.forum : `${t.source_id.toUpperCase()} · ${t.forum ?? ""}`;
   return (
-    <li className="border-b border-line py-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <a href={t.url} target="_blank" rel="noreferrer noopener" className="group min-w-0 flex-1">
-          <span className="text-[16px] transition-colors group-hover:text-gold">{t.title}</span>
-          <ExternalLink size={12} className="ml-1.5 inline text-muted" />
-          <div className="mt-1 text-xs text-muted">
-            {t.source_kind === "telegram" ? "Telegram channel" : t.forum}
-            {t.source_kind === "forum" && ` · ${t.pages_captured}/${t.pages} pages`} · {t.posts} {t.source_kind === "telegram" ? "messages" : "posts"} · {t.photos_stored}{" "}
-            photos · updated {ago(t.last_captured, now)}
-            {t.extract_cost != null && ` · analysis $${t.extract_cost.toFixed(2)}`}
-          </div>
-        </a>
-        <span className={cx("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider", status.tone)}>
-          {status.icon}
-          {status.label}
-        </span>
-      </div>
-      {t.summary && !stale && <p className="mt-3 max-w-3xl text-[14px] leading-relaxed text-paper/85">{t.summary}</p>}
-      {t.extract_error && <p className="mt-3 text-xs text-bad">{t.extract_error}</p>}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {builds.map((id) => (
-          <Link key={id} to={`/build/${id}`} className="rounded-full border border-line px-2.5 py-0.5 font-mono text-[11px] text-muted hover:border-line-strong hover:text-paper">
-            {id}
-          </Link>
-        ))}
-        {!busy && (
-          <button onClick={() => postJson(`captures/${encodeURIComponent(t.source_id)}/${encodeURIComponent(t.thread_id)}/extract`).then(onQueued)} className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-paper">
-            <RotateCw size={11} /> Analyse again
-          </button>
-        )}
+    <li className="flex gap-3 border-b border-line py-4">
+      <input
+        type="checkbox"
+        checked={picked}
+        disabled={!!t.analyse_requested || busy}
+        onChange={(e) => onPick(e.target.checked)}
+        className="mt-1.5 h-4 w-4 shrink-0 accent-[var(--color-gold)]"
+        aria-label="Select for analysis"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <a href={t.url} target="_blank" rel="noreferrer noopener" className="group min-w-0 flex-1">
+            <span className="text-[15.5px] transition-colors group-hover:text-gold">{t.title}</span>
+            <ExternalLink size={12} className="ml-1.5 inline text-muted" />
+            <div className="mt-1 text-xs text-muted">
+              {kind} · {t.posts} {t.source_kind === "telegram" ? "messages" : "posts"}
+              {t.source_kind === "forum" && t.pages > 1 && ` · ${t.pages_captured}/${t.pages} pages`} · updated {ago(t.last_captured, now)}
+              {t.extract_cost != null && ` · spent $${t.extract_cost.toFixed(2)}`}
+            </div>
+          </a>
+          <span className={cx("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider", status.tone)}>
+            {status.icon}
+            {status.label}
+          </span>
+        </div>
+        {t.summary && <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-paper/85">{t.summary}</p>}
+        {t.extract_error && <p className="mt-2 text-xs text-bad">{t.extract_error}</p>}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {builds.map((id) => (
+            <Link key={id} to={`/build/${id}`} className="rounded-full border border-line px-2.5 py-0.5 font-mono text-[11px] text-muted hover:border-line-strong hover:text-paper">
+              {id}
+            </Link>
+          ))}
+          <span className="ml-auto flex items-center gap-3">
+            {t.analyse_requested ? (
+              <button onClick={onCancel} className="text-xs text-muted hover:text-paper">
+                Cancel
+              </button>
+            ) : (
+              !busy && (
+                <button onClick={onQueue} className="inline-flex items-center gap-1 rounded-full border border-line-strong px-3 py-1 text-xs hover:bg-white/5">
+                  <Sparkles size={11} /> {t.extracted_at ? "Re-analyse" : "Analyse"} · ~${t.estimate_usd.toFixed(2)}
+                </button>
+              )
+            )}
+          </span>
+        </div>
       </div>
     </li>
   );
@@ -190,7 +305,7 @@ function Budget({ ex }: { ex: Extraction }) {
         <div className={cx("h-full", ex.budget_reached ? "bg-warn" : "bg-gold")} style={{ width: `${pct}%` }} />
       </div>
       <p className="mt-2 text-xs text-muted">
-        {ex.queued} thread{ex.queued === 1 ? "" : "s"} waiting{ex.budget_reached ? " — daily budget reached, continuing tomorrow" : ""}. Your own captures go first.
+        {ex.queued} queued{ex.budget_reached ? " — daily budget reached, the rest continues tomorrow" : ""}. Only threads you picked are analysed.
       </p>
     </div>
   );

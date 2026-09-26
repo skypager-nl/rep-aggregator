@@ -34,7 +34,7 @@ export default function Telegram() {
         <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">Telegram</h1>
         <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
           Reads the dealer channels you follow through Telegram’s official API, with your own account — never group chats or private messages. New messages are
-          checked every 30 minutes; Claude turns them into releases, restocks, prices and the occasional quality note.
+          checked every 30 minutes and wait on the Captures page — Claude only analyses a channel's new messages when you pick it there.
         </p>
       </header>
 

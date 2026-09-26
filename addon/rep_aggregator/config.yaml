@@ -1,5 +1,5 @@
 name: Rep Index
-version: "0.6.0"
+version: "0.7.0"
 slug: rep_aggregator
 description: Replica watch aggregator — builds, factories, defects and tiers
 arch:
@@ -32,6 +32,8 @@ options:
   telegram_analyse_hours: 6
   demo_data: false
   claude_daily_budget: 3
+  # Off: nothing is sent to Claude unless you pick it on the Captures page.
+  auto_analyse: false
   collectors:
     rwg: false
     reddit: false
@@ -53,6 +55,7 @@ schema:
   telegram_analyse_hours: int(1,48)
   demo_data: bool
   claude_daily_budget: float(0.5,100)
+  auto_analyse: bool
   collectors:
     rwg: bool
     reddit: bool

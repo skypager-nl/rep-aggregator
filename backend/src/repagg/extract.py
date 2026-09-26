@@ -288,7 +288,7 @@ def extract_thread(conn: sqlite3.Connection, thread_id: str, source_id: str = "r
     builds = sorted(set(result["builds"]) | (set(json.loads(t["builds"])) if telegram and t["builds"] else set()))
     conn.execute(
         "UPDATE thread SET summary = ?, extracted_at = ?, extract_model = ?, extract_error = NULL, extract_cost = COALESCE(extract_cost, 0) + ?, "
-        "builds = ?, extract_cursor = ? WHERE source_id = ? AND external_id = ?",
+        "builds = ?, extract_cursor = ?, analyse_requested = 0 WHERE source_id = ? AND external_id = ?",
         (summary, _now(), model_used, round(cost, 4), json.dumps(builds), new_cursor, source_id, thread_id),
     )
     conn.execute("INSERT INTO cost_log(at, source_id, thread_id, usd) VALUES (?, ?, ?, ?)", (_now(), source_id, thread_id, round(cost, 4)))
@@ -497,17 +497,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def auto_analyse() -> bool:
+    return bool(addon_options().get("auto_analyse"))
+
+
 def pending(conn: sqlite3.Connection, settle_seconds: int = 90) -> list[tuple[str, str]]:
-    """(source_id, thread_id) with new material since their last extraction, idle long enough
-    that a capture run (or a channel poll) has finished."""
+    """(source_id, thread_id) the owner queued for analysis (or, only if auto_analyse is on,
+    anything with new material). Waits until a capture run / multi-page topic is complete."""
+    where = "analyse_requested = 1" if not auto_analyse() else "(analyse_requested = 1 OR extracted_at IS NULL OR extracted_at < last_captured)"
     rows = conn.execute(
-        """SELECT source_id, external_id, last_captured, extracted_at FROM thread
-           WHERE extracted_at IS NULL OR extracted_at < last_captured
-           ORDER BY CASE WHEN source_id IN ('rwi') OR source_id LIKE 'reddit:%' THEN 0 WHEN source_id LIKE 'tg:%' THEN 1 ELSE 2 END,
-                    last_captured DESC"""
+        f"""SELECT source_id, external_id, last_captured, extracted_at FROM thread WHERE {where}
+            ORDER BY CASE WHEN source_id IN ('rwi') OR source_id LIKE 'reddit:%' THEN 0 WHEN source_id LIKE 'tg:%' THEN 1 ELSE 2 END,
+                     last_captured DESC"""
     ).fetchall()
     now = datetime.now(timezone.utc)
-    channel_hours = float(addon_options().get("telegram_analyse_hours") or 6)
     out = []
     for source_id, thread_id, captured, extracted in rows:
         if (now - _dt(captured)).total_seconds() < settle_seconds:
@@ -517,11 +520,18 @@ def pending(conn: sqlite3.Connection, settle_seconds: int = 90) -> list[tuple[st
 
             if not topic_complete(conn, thread_id):  # wait for every page, so a topic is paid for once
                 continue
-        # Channels are analysed in batches, not after every poll, to keep cost predictable.
-        if source_id.startswith("tg:") and extracted and (now - _dt(extracted)).total_seconds() < channel_hours * 3600:
-            continue
         out.append((source_id, thread_id))
     return out
+
+
+def estimate(conn: sqlite3.Connection, source_id: str, thread_id: str, after_post: int = 0) -> tuple[int, float]:
+    """(characters to analyse, rough USD) for the current model: thread text + the cached instructions."""
+    chars = conn.execute("SELECT COALESCE(SUM(LENGTH(body)), 0) FROM post WHERE source_id = ? AND thread_id = ? AND id > ?",
+                         (source_id, thread_id, after_post)).fetchone()[0]
+    pin, pout = PRICES.get(settings()["model"], PRICES[DEFAULT_MODEL])
+    tokens_in = chars / 3.5 + 3000
+    tokens_out = 1500 + tokens_in * 0.08  # findings JSON + reasoning, roughly
+    return chars, round((tokens_in * pin + tokens_out * pout) / 1_000_000, 3)
 
 
 def _dt(s: str) -> datetime:
@@ -529,5 +539,6 @@ def _dt(s: str) -> datetime:
 
 
 def record_error(conn: sqlite3.Connection, source_id: str, thread_id: str, error: str) -> None:
-    conn.execute("UPDATE thread SET extract_error = ?, extracted_at = ? WHERE source_id = ? AND external_id = ?", (error[:500], _now(), source_id, thread_id))
+    conn.execute("UPDATE thread SET extract_error = ?, extracted_at = ?, analyse_requested = 0 WHERE source_id = ? AND external_id = ?",
+                 (error[:500], _now(), source_id, thread_id))
     conn.commit()

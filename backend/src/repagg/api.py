@@ -453,27 +453,77 @@ def capture_setup():
 
 
 @app.get("/api/captures")
-def captures(c: sqlite3.Connection = Depends(conn)):
+def captures(source: str = "all", status: str = "all", q: str = "", limit: int = 100, offset: int = 0, c: sqlite3.Connection = Depends(conn)):
+    """Collected threads/channels with analysis state and a cost estimate. Filters: source (all|capture|reddit|rwg|telegram),
+    status (all|new|queued|analysed|stale|failed), q (title search)."""
+    from .extract import estimate
+
+    where, params = ["1=1"], []
+    if source == "capture":
+        where.append("t.source_id = 'rwi'")
+    elif source in ("reddit", "rwg"):
+        where.append("t.source_id LIKE ?")
+        params.append(f"{source}%")
+    elif source == "telegram":
+        where.append("t.source_id LIKE 'tg:%'")
+    if status == "new":
+        where.append("t.extracted_at IS NULL AND COALESCE(t.analyse_requested, 0) = 0")
+    elif status == "queued":
+        where.append("t.analyse_requested = 1")
+    elif status == "analysed":
+        where.append("t.extracted_at IS NOT NULL AND t.extract_error IS NULL AND t.extracted_at >= t.last_captured")
+    elif status == "stale":
+        where.append("t.extracted_at IS NOT NULL AND t.extracted_at < t.last_captured")
+    elif status == "failed":
+        where.append("t.extract_error IS NOT NULL")
+    if q.strip():
+        where.append("t.title LIKE ?")
+        params.append(f"%{q.strip()}%")
+    total = c.execute(f"SELECT COUNT(*) FROM thread t WHERE {' AND '.join(where)}", params).fetchone()[0]
     threads = [dict(r) for r in c.execute(
-        """
+        f"""
         SELECT t.source_id, (SELECT kind FROM source WHERE id = t.source_id) AS source_kind,
                t.external_id AS thread_id, t.url, t.title, t.forum, t.pages, t.first_seen, t.last_captured,
                t.summary, t.extracted_at, t.extract_error, t.extract_cost, t.extract_model, t.builds,
-               COUNT(DISTINCT p.page) AS pages_captured, COUNT(DISTINCT p.id) AS posts,
-               (SELECT COUNT(*) FROM photo ph JOIN post pp ON pp.id = ph.post_id WHERE pp.source_id = t.source_id AND pp.thread_id = t.external_id) AS photos,
-               (SELECT COUNT(*) FROM photo ph JOIN post pp ON pp.id = ph.post_id WHERE pp.source_id = t.source_id AND pp.thread_id = t.external_id AND ph.path != '') AS photos_stored
-        FROM thread t LEFT JOIN post p ON p.source_id = t.source_id AND p.thread_id = t.external_id
-        GROUP BY t.source_id, t.external_id ORDER BY t.last_captured DESC
-        """
+               COALESCE(t.analyse_requested, 0) AS analyse_requested, COALESCE(t.extract_cursor, 0) AS cursor,
+               (SELECT COUNT(DISTINCT p.page) FROM post p WHERE p.source_id = t.source_id AND p.thread_id = t.external_id) AS pages_captured,
+               (SELECT COUNT(*) FROM post p WHERE p.source_id = t.source_id AND p.thread_id = t.external_id) AS posts,
+               0 AS photos, 0 AS photos_stored
+        FROM thread t WHERE {' AND '.join(where)} ORDER BY t.last_captured DESC LIMIT ? OFFSET ?
+        """,
+        (*params, max(1, min(limit, 500)), max(0, offset)),
     )]
+    for t in threads:
+        after = t.pop("cursor") if t["source_id"].startswith("tg:") else 0
+        t["chars"], t["estimate_usd"] = estimate(c, t["source_id"], t["thread_id"], after)
     log = [dict(r) for r in c.execute("SELECT * FROM capture ORDER BY id DESC LIMIT 50")]
-    return {"threads": threads, "log": log}
+    return {"threads": threads, "total": total, "log": log}
+
+
+@app.post("/api/analyse")
+def analyse(payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    """Queue threads for analysis: {"items": [[source_id, thread_id], ...]} — only what the owner picks."""
+    n = 0
+    for source_id, thread_id in payload.get("items", [])[:500]:
+        n += c.execute("UPDATE thread SET analyse_requested = 1, extract_error = NULL WHERE source_id = ? AND external_id = ?",
+                       (source_id, thread_id)).rowcount
+    c.commit()
+    return {"queued": n}
+
+
+@app.post("/api/analyse/cancel")
+def analyse_cancel(payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    n = 0
+    for source_id, thread_id in payload.get("items", [])[:500]:
+        n += c.execute("UPDATE thread SET analyse_requested = 0 WHERE source_id = ? AND external_id = ?", (source_id, thread_id)).rowcount
+    c.commit()
+    return {"cancelled": n}
 
 
 @app.post("/api/captures/{source_id}/{thread_id}/extract")
 def reextract(source_id: str, thread_id: str, c: sqlite3.Connection = Depends(conn)):
     """Queue a thread for (re-)analysis; the worker picks it up within ~2 minutes."""
-    n = c.execute("UPDATE thread SET extracted_at = NULL, extract_error = NULL, extract_cursor = NULL WHERE source_id = ? AND external_id = ?",
+    n = c.execute("UPDATE thread SET analyse_requested = 1, extract_error = NULL WHERE source_id = ? AND external_id = ?",
                   (source_id, thread_id)).rowcount
     c.commit()
     if not n:
@@ -705,7 +755,9 @@ def extraction_status():
         spent = round(spent_today(c), 2)
     finally:
         c.close()
-    return {"configured": bool(cfg["api_key"]), "model": cfg["model"], "effort": cfg["effort"], "busy": _worker_state.get("busy"),
+    from .extract import auto_analyse
+
+    return {"configured": bool(cfg["api_key"]), "model": cfg["model"], "effort": cfg["effort"], "busy": _worker_state.get("busy"), "auto": auto_analyse(),
             "spent_today": spent, "daily_budget": daily_budget(), "queued": queued, "budget_reached": bool(_worker_state.get("budget_reached"))}
 
 

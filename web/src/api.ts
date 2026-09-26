@@ -273,8 +273,11 @@ export type CapturedThread = {
   extract_cost: number | null;
   extract_model: string | null;
   builds: string | null;
+  analyse_requested: number;
+  chars: number;
+  estimate_usd: number;
 };
-export type Extraction = { configured: boolean; model: string; effort: string; busy: string | null; spent_today: number; daily_budget: number; queued: number; budget_reached: boolean };
+export type Extraction = { configured: boolean; auto: boolean; model: string; effort: string; busy: string | null; spent_today: number; daily_budget: number; queued: number; budget_reached: boolean };
 export type RwgStatus = {
   enabled: boolean; paused: boolean; pause_reason: string | null; last_error: string | null; last_run: string | null; exit: string | null;
   requests_today: number; daily_cap: number; topics_known: number; topics_complete: number; topics_started: number;
