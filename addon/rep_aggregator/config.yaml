@@ -1,0 +1,31 @@
+name: Rep Index
+version: "0.1.1"
+slug: rep_aggregator
+description: Replica watch aggregator — builds, factories, defects and tiers
+arch:
+  - aarch64
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:watch
+panel_title: Rep Index
+# Raw archive and photos are re-fetchable bulk; keep HA backups small.
+backup_exclude:
+  - "raw/*"
+  - "photos/*"
+options:
+  anthropic_api_key: ""
+  demo_data: true
+  collectors:
+    reddit: false
+    rwi: false
+    telegram: false
+  max_disk_gb: 15
+schema:
+  anthropic_api_key: password
+  demo_data: bool
+  collectors:
+    reddit: bool
+    rwi: bool
+    telegram: bool
+  max_disk_gb: int(1,40)

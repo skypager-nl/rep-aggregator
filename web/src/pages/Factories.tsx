@@ -1,0 +1,58 @@
+import { motion } from "motion/react";
+import { Link } from "react-router";
+import { useApi, type FactoryListItem } from "../api";
+import { TierStack } from "../components/Charts";
+import { ErrorNote, PageLoading, StatusPill } from "../components/ui";
+import { fmtScore, scoreColor } from "../lib/format";
+
+export default function Factories() {
+  const { data, error } = useApi<FactoryListItem[]>("factories");
+  if (error) return <ErrorNote error={error} />;
+  if (!data) return <PageLoading />;
+
+  return (
+    <div className="mx-auto max-w-[1360px] px-4 md:px-10">
+      <header className="pb-12 pt-14">
+        <div className="eyebrow mb-4">Factories</div>
+        <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">The makers</h1>
+        <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
+          Ranked by the average score of their current builds. Aliases are resolved deterministically, so “CF”, “Clean” and “C Factory” all count once.
+        </p>
+      </header>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {data.map((f, i) => (
+          <motion.div key={f.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04, duration: 0.5 }}>
+            <Link to={`/factory/${f.id}`} className="group flex h-full flex-col rounded-2xl border border-line bg-panel p-6 transition-colors hover:border-line-strong">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="font-mono text-[11px] text-faint">#{i + 1}</div>
+                  <div className="mt-1 font-display text-[40px] leading-none transition-colors group-hover:text-gold">{f.name}</div>
+                </div>
+                <div className="text-right">
+                  <div className="tnum font-display text-[40px] leading-none" style={{ color: scoreColor(f.avg_score) }}>
+                    {fmtScore(f.avg_score)}
+                  </div>
+                  <div className="eyebrow mt-1">avg current</div>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <StatusPill status={f.status} />
+                {f.founded && <span className="text-xs text-faint">since {f.founded}</span>}
+                {f.aliases.length > 0 && <span className="truncate text-xs text-muted">aka {f.aliases.join(", ")}</span>}
+              </div>
+              <div className="mt-auto pt-8">
+                <TierStack counts={f.tier_counts} />
+                <div className="mt-3 flex justify-between text-xs text-muted">
+                  <span>
+                    {f.builds.filter((b) => b.status === "current").length} current · {f.builds.length} total builds
+                  </span>
+                  <span>{f.references.length} references</span>
+                </div>
+              </div>
+            </Link>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+}
