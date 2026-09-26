@@ -52,7 +52,9 @@ export function guideLabel(rank: number | null | undefined, quality: string | nu
   return `${GUIDE_RANK[rank]}${quality ? ` · ${GUIDE_QUALITY[quality]}` : ""}`;
 }
 
-/** Version label for display: nothing when the source didn't say which release it is. */
+/** Version label for display: only a known release number (V2, V3...). Anything else -- "unspecified",
+ *  or descriptors like "Free Sprung" / "Tungsten" -- is hidden. */
 export function ver(v: string | null | undefined): string {
-  return !v || v.toLowerCase() === "unspecified" ? "" : v;
+  const m = (v || "").match(/^V\d+(?:\.\d+)?\b/i);
+  return m ? m[0].toUpperCase() : "";
 }
