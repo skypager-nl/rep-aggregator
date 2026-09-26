@@ -266,3 +266,10 @@ CREATE TABLE IF NOT EXISTS cost_log (
     thread_id TEXT NOT NULL,
     usd       REAL NOT NULL
 );
+
+-- Browser sessions for direct (non-HA) access to the site --------------------------
+CREATE TABLE IF NOT EXISTS web_session (
+    token   TEXT PRIMARY KEY,
+    created TEXT NOT NULL,
+    expires TEXT NOT NULL
+);

@@ -10,6 +10,7 @@ dependencies = [
     "selectolax>=0.3.21",
     "anthropic>=1.0",
     "telethon>=1.36",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]

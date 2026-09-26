@@ -11,7 +11,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db, scoring
@@ -37,18 +37,113 @@ def _trusted(request: Request) -> bool:
     return request.client is not None and request.client.host in TRUSTED
 
 
+SESSION_COOKIE = "repagg_session"
+SESSION_DAYS = 30
+_login_failures: dict[str, list[float]] = {}
+
+
+def _web_password() -> str:
+    from .config import addon_options
+
+    return (addon_options().get("web_password") or os.environ.get("REPAGG_WEB_PASSWORD") or "").strip()
+
+
+def _valid_session(token: str | None) -> bool:
+    if not token or not _web_password():
+        return False
+    c = db.connect(DB_PATH)
+    try:
+        row = c.execute("SELECT expires FROM web_session WHERE token = ?", (token,)).fetchone()
+    finally:
+        c.close()
+    return bool(row) and row[0] > time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+
+
 @app.middleware("http")
 async def gate(request: Request, call_next):
-    """Direct (non-ingress) access may only submit captures, and only with the token."""
-    if not _trusted(request):
-        if request.url.path == "/api/health" and request.method == "GET":
-            return await call_next(request)
-        if request.url.path not in ("/api/capture", "/api/capture/photo", "/api/capture/mhtml") or request.method != "POST":
-            return JSONResponse({"detail": "forbidden"}, status_code=403)
+    """HA ingress is already authenticated. Direct access on the LAN port: captures need the token,
+    everything else needs a login session (only once a web_password is set)."""
+    if _trusted(request):
+        return await call_next(request)
+    path, method = request.url.path, request.method
+    if path == "/api/health" and method == "GET":
+        return await call_next(request)
+    if path in ("/api/capture", "/api/capture/photo", "/api/capture/mhtml") and method == "POST":
         sent = request.headers.get("x-capture-token", "")
         if not hmac.compare_digest(sent, capture_token()):
             return JSONResponse({"detail": "bad capture token"}, status_code=401)
-    return await call_next(request)
+        return await call_next(request)
+    if path in ("/login", "/logout"):
+        return await call_next(request)
+    if _valid_session(request.cookies.get(SESSION_COOKIE)):
+        return await call_next(request)
+    if path.startswith("/api/") or path.startswith("/photos/"):
+        return JSONResponse({"detail": "login required"}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Rep Index — sign in</title><style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#0a0a0b;color:#ece6da;font:15px/1.5 -apple-system,BlinkMacSystemFont,Inter,sans-serif}}
+form{{width:min(340px,88vw)}} h1{{font:400 40px Georgia,serif;margin:0 0 6px}} p{{color:#8f8a80;margin:0 0 22px;font-size:13.5px}}
+input{{width:100%;box-sizing:border-box;padding:11px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:#121214;color:#ece6da;font:inherit;outline:none}}
+input:focus{{border-color:rgba(255,255,255,.3)}} button{{margin-top:12px;width:100%;padding:11px;border-radius:999px;border:0;background:#ece6da;color:#0a0a0b;font:600 14px inherit;cursor:pointer}}
+.err{{color:#d9826f;margin-top:12px;font-size:13px}}</style></head><body>
+<form method="post" action="/login"><h1>The Rep Index</h1><p>{hint}</p>
+<input type="password" name="password" autocomplete="current-password" placeholder="Password" autofocus {disabled}>
+<button {disabled}>Sign in</button>{error}</form></body></html>"""
+
+
+def _login_page(error: str = "") -> HTMLResponse:
+    configured = bool(_web_password())
+    hint = "Private dashboard." if configured else "Direct access is off. Set <b>web_password</b> in the Rep Index app configuration in Home Assistant."
+    return HTMLResponse(LOGIN_PAGE.format(hint=hint, disabled="" if configured else "disabled", error=f'<div class="err">{error}</div>' if error else ""))
+
+
+@app.get("/login")
+def login_form():
+    return _login_page()
+
+
+@app.post("/login")
+async def login(request: Request):
+    ip = request.client.host if request.client else "?"
+    now = time.time()
+    recent = [t for t in _login_failures.get(ip, []) if now - t < 900]
+    _login_failures[ip] = recent
+    if len(recent) >= 10:
+        return _login_page("Too many attempts — try again in 15 minutes.")
+    form = await request.form()
+    password = _web_password()
+    if not password or not hmac.compare_digest(str(form.get("password", "")), password):
+        _login_failures[ip].append(now)
+        time.sleep(1.0)
+        return _login_page("Wrong password.")
+    token = secrets.token_urlsafe(32)
+    c = db.connect(DB_PATH)
+    try:
+        c.execute("DELETE FROM web_session WHERE expires < ?", (time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),))
+        c.execute("INSERT INTO web_session VALUES (?, ?, ?)", (token, time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                  time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now + SESSION_DAYS * 86400))))
+        c.commit()
+    finally:
+        c.close()
+    resp = RedirectResponse("/", status_code=303)
+    resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax")
+    return resp
+
+
+@app.get("/logout")
+def logout(request: Request):
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        c = db.connect(DB_PATH)
+        c.execute("DELETE FROM web_session WHERE token = ?", (token,))
+        c.commit()
+        c.close()
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
 
 
 @app.middleware("http")
@@ -511,6 +606,16 @@ def analyse(payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
     return {"queued": n}
 
 
+@app.post("/api/captures/{source_id}/{thread_id}/delete-analysis")
+def delete_analysis(source_id: str, thread_id: str, c: sqlite3.Connection = Depends(conn)):
+    """Retroactively discard a thread's analysis and its impact on scores; the collected posts stay."""
+    from .extract import delete_analysis as undo
+
+    if not c.execute("SELECT 1 FROM thread WHERE source_id = ? AND external_id = ?", (source_id, thread_id)).fetchone():
+        raise HTTPException(404)
+    return undo(c, source_id, thread_id)
+
+
 @app.post("/api/analyse/cancel")
 def analyse_cancel(payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
     n = 0
@@ -758,7 +863,8 @@ def extraction_status():
     from .extract import auto_analyse
 
     return {"configured": bool(cfg["api_key"]), "model": cfg["model"], "effort": cfg["effort"], "busy": _worker_state.get("busy"), "auto": auto_analyse(),
-            "spent_today": spent, "daily_budget": daily_budget(), "queued": queued, "budget_reached": bool(_worker_state.get("budget_reached"))}
+            "spent_today": spent, "daily_budget": daily_budget(), "queued": queued, "budget_reached": bool(_worker_state.get("budget_reached")),
+            "worker_error": _worker_state.get("error")}
 
 
 _worker_state: dict = {}
@@ -769,12 +875,12 @@ def _worker() -> None:
     from .extract import daily_budget, extract_thread, pending, record_error, settings, spent_today
 
     while True:
-        time.sleep(30)
+        time.sleep(20)
         if not settings()["api_key"]:
+            _worker_state["error"] = "no Anthropic API key configured"
             continue
         try:
             c = db.connect(DB_PATH)
-            db.init(c)
             for source_id, thread_id in pending(c, settle_seconds=90):
                 if spent_today(c) >= daily_budget():
                     _worker_state["budget_reached"] = True
@@ -790,7 +896,9 @@ def _worker() -> None:
                 finally:
                     _worker_state["busy"] = None
             c.close()
+            _worker_state["error"] = None
         except Exception as e:
+            _worker_state["error"] = f"{type(e).__name__}: {e}"
             print(f"[extract] worker error: {e}", flush=True)
 
 

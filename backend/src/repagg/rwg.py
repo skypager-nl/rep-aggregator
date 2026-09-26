@@ -38,6 +38,8 @@ DAILY_CAP = 600
 DELAY = (15.0, 25.0)
 RESCAN = timedelta(hours=6)
 MAX_TOPIC_PAGES_PER_CYCLE = 8
+FULL_READ_PAGES = 12   # topics up to this many pages are read whole; longer ones: first 4 + last 4
+UPDATE_PAGES = 6       # when a read topic gets new replies: at most its last 6 pages
 CHALLENGE = ("Just a moment...", "cf-chl-", "challenge-platform/h/", "Attention Required!")
 
 SCHEMA = """
@@ -67,11 +69,23 @@ CREATE TABLE IF NOT EXISTS collector_state (
 """
 
 
+_schema_ready = False
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
+    """Idempotent, but only runs once per process: status pages must not write on every view."""
+    global _schema_ready
+    if _schema_ready:
+        return
     conn.executescript(SCHEMA)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(rwg_topic)")}
+    for col, typ in (("plan", "TEXT"), ("plan_pos", "INTEGER")):
+        if col not in have:
+            conn.execute(f"ALTER TABLE rwg_topic ADD COLUMN {col} {typ}")
     for fid, slug in FORUMS.items():
         conn.execute("INSERT OR IGNORE INTO rwg_forum(id, slug) VALUES (?, ?)", (fid, slug))
     conn.commit()
+    _schema_ready = True
 
 
 def enabled() -> bool:
@@ -234,29 +248,64 @@ class RwgCollector:
         return budget
 
     def _topics(self, conn, fetch, budget, done) -> None:
-        """New or changed topics, highest priority first; long topics continue next cycle."""
+        """Breadth first: page 1 of every new topic (the review / QC request lives there), then the
+        rest of each topic's plan. Long topics are sampled (first 4 + last 4 pages), not read whole."""
+        import json
+
         from .ingest import ingest_rwg_page
         from .rwg_parse import POSTS_PER_PAGE
 
+        def plan_for(t) -> list[int]:
+            n = max(1, -(-(t["replies"] + 1) // POSTS_PER_PAGE))
+            if t["fetched_replies"] is None:  # first read
+                return list(range(1, n + 1)) if n <= FULL_READ_PAGES else [1, 2, 3, 4] + list(range(n - 3, n + 1))
+            first_new = (t["fetched_replies"] + 1) // POSTS_PER_PAGE + 1  # page holding the first new reply
+            return list(range(max(first_new, n - UPDATE_PAGES + 1), n + 1))
+
+        def fetch_page(t, page) -> None:
+            url = t["url"] + (f"&page={page}" if page > 1 else "")
+            ingest_rwg_page(conn, fetch(url), url)
+
+        # 1) page 1 of topics never touched, most promising first (about 2/3 of the budget)
+        fresh = conn.execute("SELECT * FROM rwg_topic WHERE fetched_page = 0 AND fetched_replies IS NULL "
+                             "ORDER BY priority DESC, last_post DESC LIMIT ?", (max(1, budget * 2 // 3),)).fetchall()
+        for t in fresh:
+            if budget <= 0:
+                return
+            plan = plan_for(t)
+            fetch_page(t, 1)
+            budget -= 1
+            done_all = plan == [1]
+            conn.execute("UPDATE rwg_topic SET fetched_page = 1, plan = ?, plan_pos = 1, fetched_replies = CASE WHEN ? THEN replies ELSE fetched_replies END WHERE id = ?",
+                         (json.dumps(plan), done_all, t["id"]))
+            conn.commit()
+            done["topics"] += int(done_all)
+
+        # 2) continue plans: started topics with pages left, or finished topics with new replies
         todo = conn.execute(
-            """SELECT * FROM rwg_topic WHERE fetched_replies IS NULL OR fetched_replies < replies
+            """SELECT * FROM rwg_topic WHERE (fetched_page > 0 AND fetched_replies IS NULL) OR (fetched_replies IS NOT NULL AND fetched_replies < replies)
                ORDER BY priority DESC, last_post DESC LIMIT 20"""
         ).fetchall()
         for t in todo:
-            pages = max(1, -(-(t["replies"] + 1) // POSTS_PER_PAGE))
-            start = t["fetched_page"] + 1 if t["fetched_replies"] is None else max(1, (t["fetched_replies"] // POSTS_PER_PAGE) + 1)
-            start = min(start, pages)
-            for page in range(start, min(pages, start + MAX_TOPIC_PAGES_PER_CYCLE - 1) + 1):
+            if t["fetched_replies"] is not None and t["fetched_replies"] < t["replies"] and (t["plan_pos"] or 0) >= len(json.loads(t["plan"] or "[]")):
+                plan, pos = plan_for(t), 0  # new replies since the last complete read
+            else:
+                plan, pos = json.loads(t["plan"] or "[]") or plan_for(t), t["plan_pos"] or 0
+            for page in plan[pos:pos + MAX_TOPIC_PAGES_PER_CYCLE]:
                 if budget <= 0:
+                    conn.execute("UPDATE rwg_topic SET plan = ?, plan_pos = ? WHERE id = ?", (json.dumps(plan), pos, t["id"]))
+                    conn.commit()
                     return
-                url = t["url"] + (f"&page={page}" if page > 1 else "")
-                ingest_rwg_page(conn, fetch(url), url)
+                fetch_page(t, page)
                 budget -= 1
-                conn.execute("UPDATE rwg_topic SET fetched_page = MAX(fetched_page, ?) WHERE id = ?", (page, t["id"]))
-                if page >= pages:
-                    conn.execute("UPDATE rwg_topic SET fetched_replies = replies WHERE id = ?", (t["id"],))
-                    done["topics"] += 1
+                pos += 1
+                conn.execute("UPDATE rwg_topic SET fetched_page = MAX(fetched_page, ?), plan = ?, plan_pos = ? WHERE id = ?",
+                             (page, json.dumps(plan), pos, t["id"]))
                 conn.commit()
+            if pos >= len(plan):
+                conn.execute("UPDATE rwg_topic SET fetched_replies = replies WHERE id = ?", (t["id"],))
+                conn.commit()
+                done["topics"] += 1
 
 
 def topic_complete(conn: sqlite3.Connection, topic_id: str) -> bool:

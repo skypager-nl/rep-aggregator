@@ -96,7 +96,14 @@ export default function Layout() {
           <span>
             Scores as of {fmtDate(meta?.as_of, "long")} · {fmtInt(meta?.counts.claim)} claims from {fmtInt(meta?.counts.post)} posts across {meta?.sources.length ?? "—"} sources
           </span>
-          <span>Tiers use the conservative lower bound — consensus beats hype.</span>
+          <span>
+            Tiers use the conservative lower bound — consensus beats hype.
+            {window.top === window.self && location.port === "8766" && (
+              <a href="/logout" className="ml-3 underline-offset-4 hover:text-paper hover:underline">
+                Sign out
+              </a>
+            )}
+          </span>
         </div>
       </footer>
     </div>

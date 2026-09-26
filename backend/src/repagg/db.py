@@ -6,8 +6,11 @@ from .config import DATA_DIR, DB_PATH
 
 def connect(path=DB_PATH) -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
+    # The collector, the analysis worker and the web API write concurrently: wait for the lock
+    # instead of failing after SQLite's default 5 s.
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=60)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=60000")
     # WAL + batched commits keep SD-card writes down.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")

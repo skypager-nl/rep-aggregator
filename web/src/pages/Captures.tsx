@@ -57,6 +57,7 @@ export default function Captures() {
           </div>
         )}
         {ex?.auto && <p className="mt-4 text-sm text-warn">Auto-analysis is on in the app options — new material is analysed without asking.</p>}
+        {ex?.worker_error && <p className="mt-4 text-sm text-bad">Analysis worker: {ex.worker_error}</p>}
       </header>
 
       <div className="grid gap-12 lg:grid-cols-[1fr_380px]">
@@ -118,6 +119,10 @@ export default function Captures() {
                   onPick={(on) => setPicked((p) => (on ? { ...p, [key(t)]: t } : Object.fromEntries(Object.entries(p).filter(([k]) => k !== key(t)))))}
                   onQueue={() => queue([t])}
                   onCancel={() => postJson("analyse/cancel", { items: [[t.source_id, t.thread_id]] }).then(refresh)}
+                  onDelete={() => {
+                    if (confirm(`Delete the analysis of “${t.title}”? Its findings, prices and events are removed and scores recalculated as if it was never analysed. The collected posts stay, so you can analyse it again later.`))
+                      postJson(`captures/${encodeURIComponent(t.source_id)}/${encodeURIComponent(t.thread_id)}/delete-analysis`).then(refresh);
+                  }}
                 />
               ))}
             </ul>
@@ -160,6 +165,7 @@ function ThreadRow({
   onPick,
   onQueue,
   onCancel,
+  onDelete,
 }: {
   t: CapturedThread;
   now: string;
@@ -168,6 +174,7 @@ function ThreadRow({
   onPick: (on: boolean) => void;
   onQueue: () => void;
   onCancel: () => void;
+  onDelete: () => void;
 }) {
   const builds: string[] = t.builds ? JSON.parse(t.builds) : [];
   const stale = !!t.extracted_at && t.extracted_at < t.last_captured;
@@ -218,6 +225,11 @@ function ThreadRow({
             </Link>
           ))}
           <span className="ml-auto flex items-center gap-3">
+            {t.extracted_at && !t.analyse_requested && !busy && (
+              <button onClick={onDelete} className="text-xs text-muted hover:text-bad">
+                Delete analysis
+              </button>
+            )}
             {t.analyse_requested ? (
               <button onClick={onCancel} className="text-xs text-muted hover:text-paper">
                 Cancel
@@ -328,8 +340,10 @@ function RwgCard({ nonce, onChange }: { nonce: number; onChange: () => void }) {
           <dd className="tnum">{s.topics_known.toLocaleString()}</dd>
         </div>
         <div>
-          <dt className="eyebrow">Fully read</dt>
-          <dd className="tnum">{s.topics_complete.toLocaleString()}</dd>
+          <dt className="eyebrow">Read / started</dt>
+          <dd className="tnum">
+            {s.topics_complete.toLocaleString()} / {s.topics_started.toLocaleString()}
+          </dd>
         </div>
         <div>
           <dt className="eyebrow">Requests today</dt>

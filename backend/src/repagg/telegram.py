@@ -274,6 +274,7 @@ class TelegramService:
              first.date.astimezone(timezone.utc).isoformat(timespec="seconds"), text, _now(), str(ch["id"]), first.id),
         )
         post_id = cur.lastrowid
+        conn.commit()  # never hold the write lock while downloading photos
         if photos_ok:
             for m in with_photo:
                 ref = f"tg://{ch['id']}/{m.id}"

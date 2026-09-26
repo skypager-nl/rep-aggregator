@@ -506,19 +506,21 @@ def pending(conn: sqlite3.Connection, settle_seconds: int = 90) -> list[tuple[st
     anything with new material). Waits until a capture run / multi-page topic is complete."""
     where = "analyse_requested = 1" if not auto_analyse() else "(analyse_requested = 1 OR extracted_at IS NULL OR extracted_at < last_captured)"
     rows = conn.execute(
-        f"""SELECT source_id, external_id, last_captured, extracted_at FROM thread WHERE {where}
+        f"""SELECT source_id, external_id, last_captured, extracted_at, COALESCE(analyse_requested, 0) FROM thread WHERE {where}
             ORDER BY CASE WHEN source_id IN ('rwi') OR source_id LIKE 'reddit:%' THEN 0 WHEN source_id LIKE 'tg:%' THEN 1 ELSE 2 END,
                      last_captured DESC"""
     ).fetchall()
     now = datetime.now(timezone.utc)
     out = []
-    for source_id, thread_id, captured, extracted in rows:
-        if (now - _dt(captured)).total_seconds() < settle_seconds:
+    for source_id, thread_id, captured, extracted, requested in rows:
+        # An explicit request runs on what's collected so far (re-analyse later if pages are added);
+        # only a browser capture still in progress (last page < settle_seconds ago) is waited for.
+        if (now - _dt(captured)).total_seconds() < settle_seconds and not (requested and source_id != "rwi"):
             continue
-        if source_id == "rwg":
+        if source_id == "rwg" and not requested:
             from .rwg import topic_complete
 
-            if not topic_complete(conn, thread_id):  # wait for every page, so a topic is paid for once
+            if not topic_complete(conn, thread_id):  # auto mode: wait for every page, so a topic is paid for once
                 continue
         out.append((source_id, thread_id))
     return out
@@ -542,3 +544,93 @@ def record_error(conn: sqlite3.Connection, source_id: str, thread_id: str, error
     conn.execute("UPDATE thread SET extract_error = ?, extracted_at = ?, analyse_requested = 0 WHERE source_id = ? AND external_id = ?",
                  (error[:500], _now(), source_id, thread_id))
     conn.commit()
+
+
+def delete_analysis(conn: sqlite3.Connection, source_id: str, thread_id: str) -> dict:
+    """Undo a thread's analysis: remove its findings and anything that existed only because of them
+    (defects, versions, auto-added factories/models/references), then rescore. Collected posts stay."""
+    ids = [r[0] for r in conn.execute("SELECT id FROM post WHERE source_id = ? AND thread_id = ?", (source_id, thread_id))]
+    marks = ",".join("?" * len(ids)) or "NULL"
+    counts = {
+        "claims": conn.execute(f"DELETE FROM claim WHERE post_id IN ({marks})", ids).rowcount,
+        "qc": conn.execute(f"DELETE FROM qc_verdict WHERE post_id IN ({marks})", ids).rowcount,
+        "events": conn.execute(f"DELETE FROM event WHERE post_id IN ({marks})", ids).rowcount,
+        "prices": conn.execute("DELETE FROM price_point WHERE source_id = ? AND thread_id = ?", (source_id, thread_id)).rowcount,
+    }
+    evidence = "SELECT build_id FROM claim UNION SELECT build_id FROM qc_verdict UNION SELECT build_id FROM price_point " \
+               "UNION SELECT build_id FROM event WHERE build_id IS NOT NULL"
+    counts["defects"] = conn.execute("DELETE FROM defect WHERE id NOT IN (SELECT defect_id FROM claim WHERE defect_id IS NOT NULL)").rowcount
+    orphan_builds = [r[0] for r in conn.execute(f"SELECT id FROM build WHERE id NOT IN ({evidence})")]
+    bm = ",".join("?" * len(orphan_builds)) or "NULL"
+    conn.execute(f"DELETE FROM score WHERE build_id IN ({bm})", orphan_builds)
+    conn.execute(f"DELETE FROM tier WHERE build_id IN ({bm})", orphan_builds)
+    conn.execute(f"UPDATE photo SET build_id = NULL WHERE build_id IN ({bm})", orphan_builds)
+    counts["versions"] = conn.execute(f"DELETE FROM build WHERE id IN ({bm})", orphan_builds).rowcount
+    # Auto-added (still unreviewed) names that nothing uses any more.
+    counts["factories"] = 0
+    for (fid,) in conn.execute("SELECT id FROM factory WHERE needs_review = 1 AND id NOT IN (SELECT factory_id FROM build) "
+                               "AND id NOT IN (SELECT factory_id FROM event WHERE factory_id IS NOT NULL)").fetchall():
+        conn.execute("DELETE FROM factory_alias WHERE factory_id = ?", (fid,))
+        conn.execute("DELETE FROM factory WHERE id = ?", (fid,))
+        counts["factories"] += 1
+    counts["references"] = 0
+    for (rid,) in conn.execute("SELECT id FROM reference WHERE needs_review = 1 AND id NOT IN (SELECT reference_id FROM build)").fetchall():
+        conn.execute("DELETE FROM reference_alias WHERE reference_id = ?", (rid,))
+        conn.execute("DELETE FROM reference_photo WHERE reference_id = ?", (rid,))
+        conn.execute("DELETE FROM reference WHERE id = ?", (rid,))
+        counts["references"] += 1
+    counts["models"] = 0
+    for (mid,) in conn.execute("SELECT id FROM model WHERE needs_review = 1 AND id NOT IN "
+                               "(SELECT model_id FROM reference r JOIN build b ON b.reference_id = r.id WHERE model_id IS NOT NULL)").fetchall():
+        for (rid,) in conn.execute("SELECT id FROM reference WHERE model_id = ? AND kind = 'model'", (mid,)).fetchall():
+            conn.execute("DELETE FROM reference_alias WHERE reference_id = ?", (rid,))
+            conn.execute("DELETE FROM reference_photo WHERE reference_id = ?", (rid,))
+            conn.execute("DELETE FROM reference WHERE id = ?", (rid,))
+        conn.execute("DELETE FROM model_alias WHERE model_id = ?", (mid,))
+        conn.execute("DELETE FROM model WHERE id = ?", (mid,))
+        counts["models"] += 1
+    conn.execute(
+        "UPDATE thread SET summary = NULL, extracted_at = NULL, extract_error = NULL, extract_model = NULL, builds = NULL, "
+        "extract_cursor = NULL, analyse_requested = 0 WHERE source_id = ? AND external_id = ?",
+        (source_id, thread_id),
+    )
+    conn.commit()
+    _rescore(conn)
+    return counts
+
+
+def clean_slate(conn: sqlite3.Connection) -> dict:
+    """Remove every analysis result (versions, findings, defects, verdicts, prices, events, scores)
+    and unconfirmed auto-added names; keep the catalogue scaffolding and all collected material."""
+    counts = {}
+    for table in ("claim", "qc_verdict", "event", "price_point", "score", "tier", "defect", "cost_log"):
+        counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
+    conn.execute("UPDATE photo SET build_id = NULL WHERE build_id IS NOT NULL")
+    counts["versions"] = conn.execute("DELETE FROM build").rowcount
+    counts["factories"] = 0
+    for (fid,) in conn.execute("SELECT id FROM factory WHERE needs_review = 1").fetchall():
+        conn.execute("DELETE FROM factory_alias WHERE factory_id = ?", (fid,))
+        conn.execute("DELETE FROM factory WHERE id = ?", (fid,))
+        counts["factories"] += 1
+    counts["references"] = 0
+    for (rid,) in conn.execute("SELECT id FROM reference WHERE needs_review = 1").fetchall():
+        conn.execute("DELETE FROM reference_alias WHERE reference_id = ?", (rid,))
+        conn.execute("DELETE FROM reference_photo WHERE reference_id = ?", (rid,))
+        conn.execute("DELETE FROM reference WHERE id = ?", (rid,))
+        counts["references"] += 1
+    counts["models"] = 0
+    for (mid,) in conn.execute("SELECT id FROM model WHERE needs_review = 1").fetchall():
+        for (rid,) in conn.execute("SELECT id FROM reference WHERE model_id = ?", (mid,)).fetchall():
+            conn.execute("DELETE FROM reference_alias WHERE reference_id = ?", (rid,))
+            conn.execute("DELETE FROM reference WHERE id = ?", (rid,))
+        conn.execute("DELETE FROM model_alias WHERE model_id = ?", (mid,))
+        conn.execute("DELETE FROM model WHERE id = ?", (mid,))
+        counts["models"] += 1
+    counts["threads_reset"] = conn.execute(
+        "UPDATE thread SET summary = NULL, extracted_at = NULL, extract_error = NULL, extract_model = NULL, extract_cost = NULL, "
+        "builds = NULL, extract_cursor = NULL, analyse_requested = 0"
+    ).rowcount
+    conn.execute("DELETE FROM meta WHERE key IN ('latest_as_of', 'previous_as_of')")
+    conn.commit()
+    _rescore(conn)
+    return counts

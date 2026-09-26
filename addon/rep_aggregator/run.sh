@@ -20,6 +20,13 @@ if [ -f /share/rep_aggregator/purge-demo.request ]; then
   repagg purge-demo > /share/rep_aggregator/purge-demo.result 2>&1 || true
 fi
 
+# One-shot clean slate (owner-requested): back up first, then drop all analysis results.
+if [ -f /share/rep_aggregator/clean-slate.request ]; then
+  rm -f /share/rep_aggregator/clean-slate.request
+  cp /data/repagg.db "/data/repagg.pre-clean-$(date +%Y%m%d-%H%M%S).db"
+  repagg clean-slate > /share/rep_aggregator/clean-slate.result 2>&1 || true
+fi
+
 # One-shot, owner-approved RWI probe: runs only if the request file exists, then removes it.
 PROBE=/share/rep_aggregator
 if [ -f "$PROBE/probe.request" ]; then
