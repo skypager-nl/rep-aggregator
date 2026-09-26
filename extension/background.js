@@ -21,7 +21,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+const REDDIT = /^https:\/\/(www\.|old\.|new\.)?reddit\.com\/r\/[^/]+\/(comments|wiki)\//;
+
 async function run(tabId, mode) {
+  const tab = await chrome.tabs.get(tabId);
+  if (REDDIT.test(tab.url || "")) return runSinglePage(tabId);
   const info = await inTab(tabId, readThread);
   if (!info?.isThread) return panel(tabId, "This isn't an RWI thread page.", "bad", 100, true);
 
@@ -65,6 +69,22 @@ async function run(tabId, mode) {
   await finish(tabId, info, `${stopped}Saved “${info.title}”: ${saved} page(s)${capped} — +${posts} posts, +${photos} photos${miss}.`, "good");
 }
 
+// Reddit thread or wiki page: one page, no pagination to walk.
+async function runSinglePage(tabId) {
+  badge("1/1");
+  await panel(tabId, "Loading comments and photos…", null, 20);
+  await inTab(tabId, preparePage);
+  await waitForImages(tabId);
+  await panel(tabId, "Saving…", null, 60);
+  try {
+    const mhtml = await chrome.pageCapture.saveAsMHTML({ tabId });
+    const res = await upload(mhtml, "multipart/related", "/api/capture/mhtml");
+    await panel(tabId, `Saved “${res.title}”: ${res.posts} ${res.kind === "wiki" ? "sections" : "posts"}, +${res.stored_photos} photos.`, "good", 100, true);
+  } catch (e) {
+    await panel(tabId, String(e.message || e), "bad", 100, true);
+  }
+}
+
 async function finish(tabId, info, text, tone) {
   // Put the owner back where they started.
   const now = (await chrome.tabs.get(tabId)).url;
@@ -94,7 +114,7 @@ async function preparePage() {
     return { challenged: true };
   }
   // Load every photo the way reading the whole page would: eager-load and scroll through.
-  document.querySelectorAll(".message-body img").forEach((img) => (img.loading = "eager"));
+  document.querySelectorAll("img").forEach((img) => (img.loading = "eager"));
   for (let y = 0; y < document.body.scrollHeight; y += Math.max(400, innerHeight * 0.9)) {
     scrollTo(0, y);
     await new Promise((r) => setTimeout(r, 180));
@@ -104,7 +124,7 @@ async function preparePage() {
 }
 
 function imagesPending() {
-  return [...document.querySelectorAll(".message-body img")].filter((i) => !i.complete).length;
+  return [...document.querySelectorAll(".message-body img, shreddit-post img, shreddit-comment img, .thing img, .md img")].filter((i) => !i.complete).length;
 }
 
 function showPanel(text, tone, pct, final) {

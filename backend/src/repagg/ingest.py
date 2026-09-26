@@ -134,6 +134,59 @@ def _upsert_author(conn: sqlite3.Connection, p: Post) -> int:
     return conn.execute("SELECT id FROM author WHERE source_id = 'rwi' AND handle = ?", (p.author,)).fetchone()[0]
 
 
+REDDIT_TRUST = {"RepTimeQC": 0.9, "repbuilds": 0.8}
+
+
+def ingest_reddit_page(conn: sqlite3.Connection, html: str, url: str, captured_at: str | None = None) -> dict:
+    """A Reddit thread or wiki page the owner viewed. Usernames are not stored; score is kept as a signal."""
+    from .reddit_parse import parse_reddit
+
+    now = captured_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    page = parse_reddit(html, url)
+    known = {r[0].lower(): r[0] for r in conn.execute("SELECT id FROM source WHERE id LIKE 'reddit:%'")}
+    source_id = known.get(f"reddit:{page.subreddit}".lower(), f"reddit:{page.subreddit}")
+    conn.execute("INSERT OR IGNORE INTO source(id, kind, name, url, trust) VALUES (?, 'reddit', ?, ?, ?)",
+                 (source_id, f"r/{page.subreddit}", f"https://www.reddit.com/r/{page.subreddit}", REDDIT_TRUST.get(page.subreddit, 1.0)))
+
+    raw = RAW_DIR / "reddit" / page.subreddit.lower() / f"{page.thread_id.replace(':', '_')}.html.gz"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_bytes(gzip.compress(html.encode("utf-8"), 6))
+    conn.execute(
+        """
+        INSERT INTO thread(source_id, external_id, url, title, forum, pages, first_seen, last_captured)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(source_id, external_id) DO UPDATE SET url = excluded.url, title = excluded.title, last_captured = excluded.last_captured
+        """,
+        (source_id, page.thread_id, page.url, page.title, f"r/{page.subreddit}" + (" wiki" if page.kind == "wiki" else ""), now, now),
+    )
+    if page.kind == "wiki":  # a wiki page is re-sectioned on every capture
+        conn.execute("DELETE FROM photo WHERE post_id IN (SELECT id FROM post WHERE source_id = ? AND thread_id = ?)", (source_id, page.thread_id))
+        conn.execute("DELETE FROM claim WHERE post_id IN (SELECT id FROM post WHERE source_id = ? AND thread_id = ?)", (source_id, page.thread_id))
+        conn.execute("DELETE FROM post WHERE source_id = ? AND thread_id = ?", (source_id, page.thread_id))
+    new_posts = photos = 0
+    for p in page.posts:
+        values = dict(url=f"{page.url}" if p.number == 1 else None, thread_title=page.title, posted_at=p.posted_at, body=p.text,
+                      raw_path=str(raw.relative_to(RAW_DIR)), fetched_at=now, thread_id=page.thread_id, page=1, number=p.number,
+                      reactions=p.score, is_starter=int(p.number == 1))
+        existed = conn.execute("SELECT id FROM post WHERE source_id = ? AND external_id = ?", (source_id, p.external_id)).fetchone()
+        if existed:
+            post_id = existed[0]
+            conn.execute(f"UPDATE post SET {', '.join(f'{k} = ?' for k in values)} WHERE id = ?", (*values.values(), post_id))
+        else:
+            cols = ["source_id", "external_id", *values]
+            post_id = conn.execute(f"INSERT INTO post({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                                   (source_id, p.external_id, *values.values())).lastrowid
+            new_posts += 1
+        for img in p.images:
+            photos += conn.execute("INSERT OR IGNORE INTO photo(post_id, url, path) VALUES (?, ?, '')", (post_id, img)).rowcount
+    conn.commit()
+    wanted = [img for p in page.posts for img in p.images]
+    stored = {r[0] for r in conn.execute(f"SELECT url FROM photo WHERE path != '' AND url IN ({','.join('?' * len(wanted))})", wanted)} if wanted else set()
+    return {"source": source_id, "thread_id": page.thread_id, "title": page.title, "kind": page.kind, "page": 1, "pages": 1,
+            "posts": len(page.posts), "new_posts": new_posts, "new_photos": photos,
+            "missing_photos": list(dict.fromkeys(u for u in wanted if u not in stored))}
+
+
 def ingest_mhtml(conn: sqlite3.Connection, data: bytes, captured_at: str | None = None) -> dict:
     """A page saved by the owner's Chrome (chrome.pageCapture): HTML plus the images it displayed."""
     import email
@@ -150,7 +203,12 @@ def ingest_mhtml(conn: sqlite3.Connection, data: bytes, captured_at: str | None 
             images[part["Content-Location"]] = (part.get_payload(decode=True), ct)
     if html is None:
         raise ValueError("no HTML in capture")
-    result = ingest_rwi_page(conn, html, url, captured_at)
+    if "reddit.com/" in url:
+        result = ingest_reddit_page(conn, html, url, captured_at)
+    elif "forum.replica-watch.info/threads/" in url:
+        result = ingest_rwi_page(conn, html, url, captured_at)
+    else:
+        raise ValueError(f"unsupported page: {url[:80]}")
     stored = 0
     for u in result["missing_photos"]:
         if u in images:

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Rep Index Capture",
-  "version": "0.3.0",
-  "description": "Send RWI threads you are reading to your own Rep Index. Captures only when you click; never runs in the background.",
+  "version": "0.4.0",
+  "description": "Send RWI threads and Reddit threads/wiki pages you are reading to your own Rep Index. Captures only when you click.",
   "action": {
     "default_title": "Rep Index",
     "default_popup": "popup.html"
@@ -14,7 +14,10 @@
     "pageCapture"
   ],
   "host_permissions": [
-    "https://forum.replica-watch.info/*"
+    "https://forum.replica-watch.info/*",
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "https://new.reddit.com/*"
   ],
   "optional_host_permissions": [
     "http://*/*",

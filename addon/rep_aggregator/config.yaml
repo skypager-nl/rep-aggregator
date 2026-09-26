@@ -1,5 +1,5 @@
 name: Rep Index
-version: "0.3.1"
+version: "0.4.0"
 slug: rep_aggregator
 description: Replica watch aggregator — builds, factories, defects and tiers
 arch:
@@ -21,10 +21,15 @@ panel_title: Rep Index
 backup_exclude:
   - "raw/*"
   - "photos/*"
+  - "telegram.session"
+  - "repagg.pre-purge-*"
 options:
   anthropic_api_key: ""
   claude_model: claude-opus-5
   claude_effort: high
+  telegram_api_id: ""
+  telegram_api_hash: ""
+  telegram_analyse_hours: 6
   demo_data: false
   collectors:
     reddit: false
@@ -40,6 +45,9 @@ schema:
   anthropic_api_key: password
   claude_model: list(claude-opus-5|claude-sonnet-5|claude-haiku-4-5)
   claude_effort: list(low|medium|high)
+  telegram_api_id: str?
+  telegram_api_hash: password?
+  telegram_analyse_hours: int(1,48)
   demo_data: bool
   collectors:
     reddit: bool

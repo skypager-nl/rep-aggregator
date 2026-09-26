@@ -9,6 +9,7 @@ dependencies = [
     "httpx[socks]>=0.28",
     "selectolax>=0.3.21",
     "anthropic>=1.0",
+    "telethon>=1.36",
 ]
 
 [project.scripts]

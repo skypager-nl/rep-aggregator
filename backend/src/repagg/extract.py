@@ -27,14 +27,15 @@ PRICES = {  # USD per 1M tokens: (input, output). Cache reads ~0.1x input, write
 MAX_CHARS_PER_CALL = 350_000  # ~90k tokens of thread text; longer threads are split by page
 ASPECT_IDS = [a for a, _, _ in scoring.ASPECTS]
 
-SYSTEM = """You analyse replica-watch forum threads for a private buyer's database. Your output feeds \
+SYSTEM = """You analyse replica-watch forum and Reddit threads for a private buyer's database. Your output feeds \
 aggregate quality scores per build (reference x factory x version). Report only what the thread's \
 posts actually support.
 
 How to read a thread
-- Each post is labelled [#n | date | weight w]. Weight reflects the author's standing (0.3 new \
-account ... 2.0 long-standing reviewer). You don't need to apply it; it's for your judgement of \
-which claims are first-hand and informed.
+- Each post is labelled [#n | date | weight w] (forum: the author's standing, 0.3 new account ... \
+2.0 long-standing reviewer) or [#n | date | score s] (Reddit: community upvotes). Use these to judge \
+which claims are first-hand, informed and agreed with. Reddit wiki pages arrive as numbered sections; \
+treat them as curated community consensus.
 - Quoted text ("> quoting #n") belongs to the quoted post, not the replying one.
 - A post may discuss several builds (e.g. comparing factories). Attribute each claim to the right one.
 - Skip jokes, greetings, off-topic chatter, dealer ads, and questions with no answer.
@@ -65,7 +66,36 @@ GL (green light), RL (red light) or mixed, with counts of replies voting each wa
 
 Prices: only explicit USD prices for a specific build (convert only if the thread gives the USD figure).
 
+Events: dated news the posts report — a factory releasing a new build or version ("release"), restocks ("restock"), notable price changes ("price"), a factory closing ("closure") or rebranding ("rebrand"). Give a short neutral title; build may be "" for factory-level news (then name the factory).
+
 Summary: 2-3 neutral sentences stating the thread's conclusion about the build(s). No usernames.
+
+Known references (id: name):
+{references}
+
+Known factories and aliases:
+{factories}
+"""
+
+SYSTEM_TELEGRAM = """You analyse messages from a replica-watch dealer's Telegram channel for a private buyer's database. Dealers announce releases and restocks, post price lists, share QC photos of pieces they ship, and relay factory news. Treat quality statements as the dealer's (biased) opinion.
+
+How to read the messages
+- Each message is labelled [#id | date | n photos]. Albums are merged into one message.
+- Skip greetings, payment/shipping admin, and generic promotion without concrete facts.
+
+Builds: as in forum threads — reference is one of the known references below or "OTHER"; factory as written (dealers are not factories); version "V1"/"V2"/... or "unspecified"; movement if named.
+
+Events (the main output): "release" (new build or version available), "restock", "price" (a price change), "closure"/"rebrand" (factory news). Short neutral titles; build "" for factory-level news (then name the factory).
+
+Prices: explicit USD prices per build from price lists or offers (post = the message id).
+
+Claims: only when a message makes a concrete, checkable quality statement about one aspect (e.g. "V3 fixes the bezel alignment"); use evidence "photo" when QC photos are attached. Aspects: {aspects}. Sentiment -2..2, severity 0..3 as usual. Most dealer messages yield no claims.
+
+Defects: only flaws the dealer explicitly acknowledges, with status "fixed" if a new version fixes them.
+
+QC verdicts: none (return an empty list).
+
+Summary: one or two neutral sentences on what this batch of messages announced.
 
 Known references (id: name):
 {references}
@@ -102,6 +132,9 @@ def schema(ref_ids: list[str]) -> dict:
             "build": STR, "post": INT, "verdict": _enum(["GL", "RL", "mixed"]), "gl_votes": INT, "rl_votes": INT,
         })},
         "prices": {"type": "array", "items": obj({"build": STR, "post": INT, "dealer": STR, "price_usd": {"type": "number"}})},
+        "events": {"type": "array", "items": obj({
+            "build": STR, "factory": STR, "post": INT, "kind": _enum(["release", "restock", "price", "closure", "rebrand"]), "title": STR,
+        })},
     })
 
 
@@ -114,12 +147,12 @@ def settings() -> dict:
     }
 
 
-def _system_prompt(conn: sqlite3.Connection) -> tuple[str, list[str]]:
+def _system_prompt(conn: sqlite3.Connection, kind: str = "forum") -> tuple[str, list[str]]:
     refs = conn.execute("SELECT id, name FROM reference ORDER BY id").fetchall()
     aliases: dict[str, list[str]] = {}
     for alias, fid in conn.execute("SELECT alias, factory_id FROM factory_alias ORDER BY factory_id, alias"):
         aliases.setdefault(fid, []).append(alias)
-    text = SYSTEM.format(
+    text = (SYSTEM_TELEGRAM if kind == "telegram" else SYSTEM).format(
         aspects=", ".join(ASPECT_IDS),
         references="\n".join(f"- {r['id']}: {r['name']}" for r in refs),
         factories="\n".join(f"- {', '.join(a)}" for a in aliases.values()),
@@ -127,27 +160,34 @@ def _system_prompt(conn: sqlite3.Connection) -> tuple[str, list[str]]:
     return text, [r["id"] for r in refs]
 
 
-def _thread_text(conn: sqlite3.Connection, thread_id: str) -> list[tuple[list[int], str]]:
+def _thread_text(conn: sqlite3.Connection, source_id: str, thread_id: str, after_post: int = 0, telegram: bool = False) -> list[tuple[list[int], str]]:
     """Posts rendered for the model, grouped into chunks of whole pages."""
     rows = conn.execute(
         """
-        SELECT p.number, p.page, p.posted_at, p.body, p.quotes, COALESCE(a.reputation, 1.0) AS w,
-               (SELECT COUNT(*) FROM photo ph WHERE ph.post_id = p.id) AS photos
+        SELECT p.id, p.number, COALESCE(p.page, 1) AS page, p.posted_at, p.body, p.quotes, p.external_id, p.reactions,
+               COALESCE(a.reputation, 1.0) AS w, (SELECT COUNT(*) FROM photo ph WHERE ph.post_id = p.id) AS photos
         FROM post p LEFT JOIN author a ON a.id = p.author_id
-        WHERE p.source_id = 'rwi' AND p.thread_id = ? ORDER BY p.page, p.number
+        WHERE p.source_id = ? AND p.thread_id = ? AND p.id > ? ORDER BY page, p.number
         """,
-        (thread_id,),
+        (source_id, thread_id, after_post),
     ).fetchall()
     chunks: list[tuple[list[int], str]] = []
     pages: list[int] = []
     buf = ""
     for r in rows:
         quotes = json.loads(r["quotes"]) if r["quotes"] else []
-        quoted = "".join(f"> quoting #{_post_no(conn, thread_id, q.get('source_post_id'))}: {q['text'][:400]}\n" for q in quotes)
+        quoted = "".join(f"> quoting #{_post_no(conn, source_id, q.get('source_post_id'))}: {q['text'][:400]}\n" for q in quotes)
         photos = f" | {r['photos']} photos" if r["photos"] else ""
         body = re.sub(r"[_=~*\-\u2013\u2014]{6,}|\u200b", "", r["body"] or "")
         body = re.sub(r"\n{3,}", "\n\n", body).strip()
-        text = f"[#{r['number']} | {r['posted_at'][:10]} | weight {r['w']:.1f}{photos}]\n{quoted}{body}\n\n"
+        if telegram:
+            label = f"[#{r['number']} | {r['posted_at'][:10]}{photos}]"
+        elif source_id.startswith("reddit:"):
+            score = f" | score {r['reactions']}" if r["reactions"] is not None else ""
+            label = f"[#{r['number']} | {r['posted_at'][:10]}{score}{photos}]"
+        else:
+            label = f"[#{r['number']} | {r['posted_at'][:10]} | weight {r['w']:.1f}{photos}]"
+        text = f"{label}\n{quoted}{body}\n\n"
         if buf and len(buf) + len(text) > MAX_CHARS_PER_CALL and r["page"] not in pages:
             chunks.append((pages, buf))
             pages, buf = [], ""
@@ -159,15 +199,15 @@ def _thread_text(conn: sqlite3.Connection, thread_id: str) -> list[tuple[list[in
     return chunks
 
 
-def _post_no(conn, thread_id, external_id) -> str:
+def _post_no(conn, source_id, external_id) -> str:
     if not external_id:
         return "?"
-    r = conn.execute("SELECT number FROM post WHERE source_id = 'rwi' AND external_id = ?", (external_id,)).fetchone()
+    r = conn.execute("SELECT number FROM post WHERE source_id = ? AND external_id = ?", (source_id, external_id)).fetchone()
     return str(r[0]) if r and r[0] else "?"
 
 
-def _call(client: anthropic.Anthropic, model: str, effort: str, system: str, ref_ids: list[str], title: str, forum: str, pages: list[int], total: int, body: str):
-    user = f"Thread: {title}\nForum: {forum}\nPages in this part: {pages} of {total}\n\n{body}"
+def _call(client: anthropic.Anthropic, model: str, effort: str, system: str, ref_ids: list[str], header: str, body: str):
+    user = f"{header}\n\n{body}"
     kwargs = dict(
         model=model,
         max_tokens=32000,
@@ -192,54 +232,68 @@ def _call(client: anthropic.Anthropic, model: str, effort: str, system: str, ref
     return json.loads(text), msg.usage, msg.model
 
 
-def extract_thread(conn: sqlite3.Connection, thread_id: str) -> dict:
+def extract_thread(conn: sqlite3.Connection, thread_id: str, source_id: str = "rwi") -> dict:
+    """Analyse a thread (forum/Reddit: whole thread, replacing earlier findings) or a Telegram
+    channel (incremental: only messages after the last analysed one, findings appended)."""
     cfg = settings()
     if not cfg["api_key"]:
         raise RuntimeError("no Anthropic API key configured")
-    t = conn.execute("SELECT * FROM thread WHERE source_id = 'rwi' AND external_id = ?", (thread_id,)).fetchone()
+    t = conn.execute("SELECT * FROM thread WHERE source_id = ? AND external_id = ?", (source_id, thread_id)).fetchone()
     if not t:
-        raise ValueError(f"unknown thread {thread_id}")
-    client = anthropic.Anthropic(api_key=cfg["api_key"], max_retries=3)
-    system, ref_ids = _system_prompt(conn)
+        raise ValueError(f"unknown thread {source_id}/{thread_id}")
+    kind = conn.execute("SELECT kind FROM source WHERE id = ?", (source_id,)).fetchone()[0]
+    telegram = kind == "telegram"
+    cursor = (t["extract_cursor"] or 0) if telegram else 0
 
-    merged = {"summary": [], "builds": [], "claims": [], "defects": [], "qc": [], "prices": []}
+    client = anthropic.Anthropic(api_key=cfg["api_key"], max_retries=3)
+    system, ref_ids = _system_prompt(conn, "telegram" if telegram else "forum")
+    merged = {k: [] for k in ("summary", "builds", "claims", "defects", "qc", "prices", "events")}
     cost = 0.0
     model_used = cfg["model"]
-    for pages, body in _thread_text(conn, thread_id):
-        out, usage, model_used = _call(client, cfg["model"], cfg["effort"], system, ref_ids, t["title"], t["forum"] or "", pages, t["pages"], body)
+    chunks = _thread_text(conn, source_id, thread_id, after_post=cursor, telegram=telegram)
+    for pages, body in chunks:
+        header = (f"Telegram channel: {t['title']}" if telegram
+                  else f"Thread: {t['title']}\nForum: {t['forum'] or ''}\nPages in this part: {pages} of {t['pages']}")
+        out, usage, model_used = _call(client, cfg["model"], cfg["effort"], system, ref_ids, header, body)
         merged["summary"].append(out["summary"])
-        for k in ("builds", "claims", "defects", "qc", "prices"):
-            merged[k].extend(out[k])
+        for k in merged:
+            if k != "summary":
+                merged[k].extend(out[k])
         cost += _cost(cfg["model"], usage)
 
-    summary = " ".join(merged["summary"]) if len(merged["summary"]) == 1 else " ".join(merged["summary"][-1:])
-    result = _store(conn, t, merged, summary, model_used)
+    new_cursor = conn.execute("SELECT MAX(id) FROM post WHERE source_id = ? AND thread_id = ?", (source_id, thread_id)).fetchone()[0] or cursor
+    summary = merged["summary"][-1] if merged["summary"] else (t["summary"] or "")
+    result = _store(conn, t, merged, model_used, replace=not telegram, after_post=cursor)
+    builds = sorted(set(result["builds"]) | (set(json.loads(t["builds"])) if telegram and t["builds"] else set()))
     conn.execute(
         "UPDATE thread SET summary = ?, extracted_at = ?, extract_model = ?, extract_error = NULL, extract_cost = COALESCE(extract_cost, 0) + ?, "
-        "builds = ? WHERE source_id = 'rwi' AND external_id = ?",
-        (summary, _now(), model_used, round(cost, 4), json.dumps(result["builds"]), thread_id),
+        "builds = ?, extract_cursor = ? WHERE source_id = ? AND external_id = ?",
+        (summary, _now(), model_used, round(cost, 4), json.dumps(builds), new_cursor, source_id, thread_id),
     )
     conn.commit()
     _rescore(conn)
-    return {**result, "summary": summary, "cost_usd": round(cost, 4), "model": model_used}
+    return {**result, "summary": summary, "cost_usd": round(cost, 4), "model": model_used, "chunks": len(chunks)}
 
 
-def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, summary: str, model: str) -> dict:
-    thread_id = t["external_id"]
+def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, model: str, replace: bool = True, after_post: int = 0) -> dict:
+    source_id, thread_id = t["source_id"], t["external_id"]
     post_ids = {r["number"]: (r["id"], r["posted_at"]) for r in conn.execute(
-        "SELECT id, number, posted_at FROM post WHERE source_id = 'rwi' AND thread_id = ?", (thread_id,))}
+        "SELECT id, number, posted_at FROM post WHERE source_id = ? AND thread_id = ? AND id > ?", (source_id, thread_id, after_post))}
     ids = [v[0] for v in post_ids.values()]
     marks = ",".join("?" * len(ids)) or "NULL"
-    # Re-extraction replaces this thread's previous findings.
+    # Findings are keyed to the posts analysed: re-analysis replaces them, never duplicates.
     conn.execute(f"DELETE FROM claim WHERE post_id IN ({marks})", ids)
     conn.execute(f"DELETE FROM qc_verdict WHERE post_id IN ({marks})", ids)
-    conn.execute("DELETE FROM price_point WHERE source_id = 'rwi' AND thread_id = ?", (thread_id,))
+    conn.execute(f"DELETE FROM event WHERE post_id IN ({marks})", ids)
+    if replace:
+        conn.execute("DELETE FROM price_point WHERE source_id = ? AND thread_id = ?", (source_id, thread_id))
 
     builds: dict[str, str] = {}
     for b in out["builds"]:
         if b["reference"] == "OTHER":
             continue
-        builds[b["key"]] = _resolve_build(conn, b)
+        if (build_id := _resolve_build(conn, b)):
+            builds[b["key"]] = build_id
 
     defect_ids: dict[tuple[str, str], int] = {}
     for d in out["defects"]:
@@ -276,21 +330,40 @@ def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, summary: str, mo
     for p in out["prices"]:
         build_id, post = builds.get(p["build"]), post_ids.get(p["post"])
         if build_id and post and 50 <= p["price_usd"] <= 5000:
-            conn.execute("INSERT INTO price_point(build_id, source_id, dealer, price_usd, observed_at, thread_id) VALUES (?, 'rwi', ?, ?, ?, ?)",
-                         (build_id, p["dealer"] or None, p["price_usd"], post[1][:10], thread_id))
+            conn.execute("INSERT INTO price_point(build_id, source_id, dealer, price_usd, observed_at, thread_id) VALUES (?, ?, ?, ?, ?, ?)",
+                         (build_id, source_id, p["dealer"] or (t["title"] if source_id.startswith("tg:") else None), p["price_usd"], post[1][:10], thread_id))
 
-    return {"builds": sorted(set(builds.values())), "claims": n_claims, "defects": len(defect_ids), "qc": len(out["qc"]), "prices": len(out["prices"])}
+    n_events = 0
+    for e in out.get("events", []):
+        post = post_ids.get(e["post"])
+        if not post:
+            continue
+        build_id = builds.get(e["build"])
+        factory_id = conn.execute("SELECT factory_id FROM build WHERE id = ?", (build_id,)).fetchone()[0] if build_id else None
+        if not factory_id and e["factory"]:
+            row = conn.execute("SELECT factory_id FROM factory_alias WHERE alias = ?", (e["factory"].strip(),)).fetchone()
+            factory_id = row[0] if row else None
+        if not (build_id or factory_id):
+            continue
+        conn.execute("INSERT INTO event(kind, factory_id, build_id, title, occurred_at, source_id, post_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (e["kind"], factory_id, build_id, e["title"], post[1][:10], source_id, post[0]))
+        n_events += 1
+
+    return {"builds": sorted(set(builds.values())), "claims": n_claims, "defects": len(defect_ids), "qc": len(out["qc"]),
+            "prices": len(out["prices"]), "events": n_events}
 
 
-def _resolve_build(conn: sqlite3.Connection, b: dict) -> str:
+def _resolve_build(conn: sqlite3.Connection, b: dict) -> str | None:
     """Deterministic mapping via the alias tables; unknown factories are added and flagged for review."""
     name = b["factory"].strip()
+    if not name or conn.execute("SELECT 1 FROM factory_block WHERE alias = ?", (name,)).fetchone():
+        return None  # owner marked this name "not a factory"
     row = conn.execute("SELECT factory_id FROM factory_alias WHERE alias = ?", (name,)).fetchone()
     if row:
         factory_id = row[0]
     else:
         factory_id = re.sub(r"[^a-z0-9]+", "", name.lower()) or "unknown"
-        conn.execute("INSERT OR IGNORE INTO factory(id, name, status, notes) VALUES (?, ?, 'unknown', 'auto-added by extraction — review')", (factory_id, name))
+        conn.execute("INSERT OR IGNORE INTO factory(id, name, status, notes, needs_review) VALUES (?, ?, 'unknown', 'auto-added by extraction', 1)", (factory_id, name))
         conn.execute("INSERT OR IGNORE INTO factory_alias VALUES (?, ?)", (name, factory_id))
     version = b["version"].strip().upper() if re.fullmatch(r"\s*[Vv]\d+(\.\d+)?\s*", b["version"]) else "unspecified"
     build_id = f"{factory_id}-{b['reference'].lower()}-{version.lower()}"
@@ -335,18 +408,29 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def pending(conn: sqlite3.Connection, settle_seconds: int = 90) -> list[str]:
-    """Threads with new captures since their last extraction, idle long enough that a capture run has finished."""
+def pending(conn: sqlite3.Connection, settle_seconds: int = 90) -> list[tuple[str, str]]:
+    """(source_id, thread_id) with new material since their last extraction, idle long enough
+    that a capture run (or a channel poll) has finished."""
     rows = conn.execute(
-        """
-        SELECT external_id, last_captured FROM thread
-        WHERE source_id = 'rwi' AND (extracted_at IS NULL OR extracted_at < last_captured)
-        """
+        "SELECT source_id, external_id, last_captured, extracted_at FROM thread WHERE extracted_at IS NULL OR extracted_at < last_captured"
     ).fetchall()
     now = datetime.now(timezone.utc)
-    return [r[0] for r in rows if (now - datetime.fromisoformat(r[1])).total_seconds() >= settle_seconds]
+    channel_hours = float(addon_options().get("telegram_analyse_hours") or 6)
+    out = []
+    for source_id, thread_id, captured, extracted in rows:
+        if (now - _dt(captured)).total_seconds() < settle_seconds:
+            continue
+        # Channels are analysed in batches, not after every poll, to keep cost predictable.
+        if source_id.startswith("tg:") and extracted and (now - _dt(extracted)).total_seconds() < channel_hours * 3600:
+            continue
+        out.append((source_id, thread_id))
+    return out
 
 
-def record_error(conn: sqlite3.Connection, thread_id: str, error: str) -> None:
-    conn.execute("UPDATE thread SET extract_error = ?, extracted_at = ? WHERE source_id = 'rwi' AND external_id = ?", (error[:500], _now(), thread_id))
+def _dt(s: str) -> datetime:
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def record_error(conn: sqlite3.Connection, source_id: str, thread_id: str, error: str) -> None:
+    conn.execute("UPDATE thread SET extract_error = ?, extracted_at = ? WHERE source_id = ? AND external_id = ?", (error[:500], _now(), source_id, thread_id))
     conn.commit()

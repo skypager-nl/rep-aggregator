@@ -17,10 +17,10 @@ export default function Captures() {
   return (
     <div className="mx-auto max-w-[1360px] px-4 md:px-10">
       <header className="pb-10 pt-14">
-        <div className="eyebrow mb-4">RWI · from your own browsing</div>
+        <div className="eyebrow mb-4">RWI · Reddit · Telegram</div>
         <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">Captures</h1>
         <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
-          Threads you sent with the Chrome extension. Claude reads each thread and turns it into findings that feed the scores — only the conclusion and a link to the
+          RWI and Reddit pages you sent with the Chrome extension, and the Telegram channels you follow. Claude reads each thread and turns it into findings that feed the scores — only the conclusion and a link to the
           source are kept on the site.
         </p>
         {ex && !ex.configured && (
@@ -35,7 +35,7 @@ export default function Captures() {
         <section>
           <SectionHead
             eyebrow={`${data.threads.length} threads${ex?.configured ? ` · ${ex.model}` : ""}`}
-            title="Analysed threads"
+            title="Analysed sources"
             action={
               <button onClick={refresh} className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-paper">
                 <RotateCw size={13} /> Refresh
@@ -45,7 +45,7 @@ export default function Captures() {
           {!data.threads.length && <p className="text-sm text-muted">Nothing yet — open an RWI thread and click the extension’s button.</p>}
           <ul>
             {data.threads.map((t) => (
-              <ThreadRow key={t.thread_id} t={t} now={now} busy={ex?.busy === t.thread_id} onQueued={refresh} />
+              <ThreadRow key={`${t.source_id}/${t.thread_id}`} t={t} now={now} busy={ex?.busy === t.thread_id} onQueued={refresh} />
             ))}
           </ul>
         </section>
@@ -90,7 +90,9 @@ function ThreadRow({ t, now, busy, onQueued }: { t: CapturedThread; now: string;
           <span className="text-[16px] transition-colors group-hover:text-gold">{t.title}</span>
           <ExternalLink size={12} className="ml-1.5 inline text-muted" />
           <div className="mt-1 text-xs text-muted">
-            {t.forum} · {t.pages_captured}/{t.pages} pages · {t.photos_stored} photos · captured {ago(t.last_captured, now)}
+            {t.source_kind === "telegram" ? "Telegram channel" : t.forum}
+            {t.source_kind === "forum" && ` · ${t.pages_captured}/${t.pages} pages`} · {t.posts} {t.source_kind === "telegram" ? "messages" : "posts"} · {t.photos_stored}{" "}
+            photos · updated {ago(t.last_captured, now)}
             {t.extract_cost != null && ` · analysis $${t.extract_cost.toFixed(2)}`}
           </div>
         </a>
@@ -108,7 +110,7 @@ function ThreadRow({ t, now, busy, onQueued }: { t: CapturedThread; now: string;
           </Link>
         ))}
         {!busy && (
-          <button onClick={() => postJson(`captures/${t.thread_id}/extract`).then(onQueued)} className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-paper">
+          <button onClick={() => postJson(`captures/${encodeURIComponent(t.source_id)}/${encodeURIComponent(t.thread_id)}/extract`).then(onQueued)} className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-paper">
             <RotateCw size={11} /> Analyse again
           </button>
         )}

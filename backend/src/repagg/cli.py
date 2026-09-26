@@ -30,6 +30,7 @@ def main() -> None:
     ing.add_argument("file")
     ex = sub.add_parser("extract", help="analyse a captured thread with Claude (uses the API; costs money)")
     ex.add_argument("thread_id")
+    ex.add_argument("--source", default="rwi")
     sub.add_parser("egress-check", help="verify the RWI crawler's proxy exits away from home (IP-echo only)")
     serve = sub.add_parser("serve", help="run the web app")
     serve.add_argument("--host", default="0.0.0.0")
@@ -94,7 +95,7 @@ def main() -> None:
 
         from .extract import extract_thread
 
-        print(_json.dumps(extract_thread(conn, args.thread_id), indent=2))
+        print(_json.dumps(extract_thread(conn, args.thread_id, args.source), indent=2))
     elif args.cmd == "purge-demo":
         from . import demo
 

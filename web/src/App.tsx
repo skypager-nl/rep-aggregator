@@ -6,9 +6,11 @@ import Compare from "./pages/Compare";
 import Explore from "./pages/Explore";
 import Factories from "./pages/Factories";
 import Factory from "./pages/Factory";
+import FactoryReview from "./pages/FactoryReview";
 import Home from "./pages/Home";
 import Pivot from "./pages/Pivot";
 import Reference from "./pages/Reference";
+import Telegram from "./pages/Telegram";
 import Tiers from "./pages/Tiers";
 
 // Hash routing: HA ingress can't rewrite deep links to index.html.
@@ -23,10 +25,12 @@ export default function App() {
           <Route path="build/:id" element={<Build />} />
           <Route path="factories" element={<Factories />} />
           <Route path="factory/:id" element={<Factory />} />
+          <Route path="factories/review" element={<FactoryReview />} />
           <Route path="explore" element={<Explore />} />
           <Route path="pivot" element={<Pivot />} />
           <Route path="compare" element={<Compare />} />
           <Route path="captures" element={<Captures />} />
+          <Route path="telegram" element={<Telegram />} />
         </Route>
       </Routes>
     </HashRouter>

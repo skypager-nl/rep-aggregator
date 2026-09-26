@@ -12,11 +12,18 @@ $("opts").onclick = (e) => {
     $("o2").onclick = () => chrome.runtime.openOptionsPage();
     return;
   }
-  if (!tab?.url || !/^https:\/\/forum\.replica-watch\.info\/threads\//.test(tab.url)) {
-    $("status").textContent = "Open an RWI thread to capture it.";
+  const rwi = /^https:\/\/forum\.replica-watch\.info\/threads\//.test(tab?.url || "");
+  const reddit = /^https:\/\/(www\.|old\.|new\.)?reddit\.com\/r\/[^/]+\/(comments|wiki)\//.test(tab?.url || "");
+  if (!rwi && !reddit) {
+    $("status").textContent = "Open an RWI thread, or a Reddit thread or wiki page, to capture it.";
     return;
   }
-  $("status").textContent = (tab.title || "").replace(/ \| Replica Watch Info$/, "");
+  $("status").textContent = (tab.title || "").replace(/ \| Replica Watch Info$/, "").replace(/ : r\/\w+$/, "");
+  if (reddit) {
+    $("thread").style.display = "none";
+    $("page").classList.add("primary");
+    $("page").textContent = "Capture this page";
+  }
   for (const mode of ["thread", "page"]) {
     $(mode).disabled = false;
     $(mode).onclick = async () => {

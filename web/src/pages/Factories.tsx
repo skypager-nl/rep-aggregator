@@ -1,12 +1,13 @@
 import { motion } from "motion/react";
 import { Link } from "react-router";
-import { useApi, type FactoryListItem } from "../api";
+import { useApi, type FactoryListItem, type Meta } from "../api";
 import { TierStack } from "../components/Charts";
 import { ErrorNote, PageLoading, StatusPill } from "../components/ui";
 import { fmtScore, scoreColor } from "../lib/format";
 
 export default function Factories() {
   const { data, error } = useApi<FactoryListItem[]>("factories");
+  const { data: meta } = useApi<Meta>("meta");
   if (error) return <ErrorNote error={error} />;
   if (!data) return <PageLoading />;
 
@@ -15,6 +16,13 @@ export default function Factories() {
       <header className="pb-12 pt-14">
         <div className="eyebrow mb-4">Factories</div>
         <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">The makers</h1>
+        <Link
+          to="/factories/review"
+          className="mt-6 inline-flex items-center gap-2 rounded-full border border-line-strong px-4 py-1.5 text-sm transition-colors hover:bg-white/5"
+        >
+          Review factories
+          {meta && meta.factories_to_review > 0 && <span className="rounded-full bg-warn/20 px-2 font-mono text-[11px] text-warn">{meta.factories_to_review} new</span>}
+        </Link>
         <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
           Ranked by the average score of their current builds. Aliases are resolved deterministically, so “CF”, “Clean” and “C Factory” all count once.
         </p>

@@ -143,6 +143,7 @@ def meta(c: sqlite3.Connection = Depends(conn)):
         "tiers": [t for t, _ in scoring.TIERS],
         "families": [r[0] for r in c.execute("SELECT DISTINCT family FROM reference ORDER BY family")],
         "factories": [dict(r) for r in c.execute("SELECT id, name, status FROM factory ORDER BY name")],
+        "factories_to_review": c.execute("SELECT COUNT(*) FROM factory WHERE needs_review = 1").fetchone()[0],
         "sources": [dict(r) for r in c.execute("SELECT id, kind, name, trust FROM source ORDER BY trust DESC")],
     }
 
@@ -448,7 +449,8 @@ def capture_setup():
 def captures(c: sqlite3.Connection = Depends(conn)):
     threads = [dict(r) for r in c.execute(
         """
-        SELECT t.external_id AS thread_id, t.url, t.title, t.forum, t.pages, t.first_seen, t.last_captured,
+        SELECT t.source_id, (SELECT kind FROM source WHERE id = t.source_id) AS source_kind,
+               t.external_id AS thread_id, t.url, t.title, t.forum, t.pages, t.first_seen, t.last_captured,
                t.summary, t.extracted_at, t.extract_error, t.extract_cost, t.extract_model, t.builds,
                COUNT(DISTINCT p.page) AS pages_captured, COUNT(DISTINCT p.id) AS posts,
                (SELECT COUNT(*) FROM photo ph JOIN post pp ON pp.id = ph.post_id WHERE pp.source_id = t.source_id AND pp.thread_id = t.external_id) AS photos,
@@ -461,14 +463,155 @@ def captures(c: sqlite3.Connection = Depends(conn)):
     return {"threads": threads, "log": log}
 
 
-@app.post("/api/captures/{thread_id}/extract")
-def reextract(thread_id: str, c: sqlite3.Connection = Depends(conn)):
-    """Queue a thread for (re-)analysis; the worker picks it up within ~30 s."""
-    n = c.execute("UPDATE thread SET extracted_at = NULL, extract_error = NULL WHERE source_id = 'rwi' AND external_id = ?", (thread_id,)).rowcount
+@app.post("/api/captures/{source_id}/{thread_id}/extract")
+def reextract(source_id: str, thread_id: str, c: sqlite3.Connection = Depends(conn)):
+    """Queue a thread for (re-)analysis; the worker picks it up within ~2 minutes."""
+    n = c.execute("UPDATE thread SET extracted_at = NULL, extract_error = NULL, extract_cursor = NULL WHERE source_id = ? AND external_id = ?",
+                  (source_id, thread_id)).rowcount
     c.commit()
     if not n:
         raise HTTPException(404)
     return {"queued": thread_id}
+
+
+# ---- factory review (ingress only: the LAN gate rejects everything but captures) ----
+
+def _admin(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/admin/factories")
+def admin_factories(c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    return {"factories": admin.list_factories(c), "blocked": admin.blocked(c), "statuses": list(admin.STATUSES)}
+
+
+@app.post("/api/admin/factories/{factory_id}")
+def admin_update(factory_id: str, payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    _admin(admin.update_factory, c, factory_id, name=payload.get("name"), status=payload.get("status"), reviewed=payload.get("reviewed"))
+    return {"ok": True}
+
+
+@app.post("/api/admin/factories/{factory_id}/aliases")
+def admin_add_alias(factory_id: str, payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    _admin(admin.add_alias, c, factory_id, payload.get("alias", ""))
+    return {"ok": True}
+
+
+@app.delete("/api/admin/factories/{factory_id}/aliases/{alias}")
+def admin_remove_alias(factory_id: str, alias: str, c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    _admin(admin.remove_alias, c, factory_id, alias)
+    return {"ok": True}
+
+
+@app.post("/api/admin/factories/{factory_id}/merge")
+def admin_merge(factory_id: str, payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    return _admin(admin.merge, c, factory_id, payload.get("into", ""))
+
+
+@app.delete("/api/admin/factories/{factory_id}")
+def admin_discard(factory_id: str, c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    return _admin(admin.discard, c, factory_id)
+
+
+@app.delete("/api/admin/blocked/{alias}")
+def admin_unblock(alias: str, c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    admin.unblock(c, alias)
+    return {"ok": True}
+
+
+# ---- Telegram (ingress only) -------------------------------------------------
+
+def _tg(coro_fn, *args, timeout: float = 120):
+    from . import telegram
+
+    try:
+        return telegram.service().run(coro_fn(telegram.service(), *args), timeout=timeout)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"{type(e).__name__}: {e}")
+
+
+@app.get("/api/telegram")
+def telegram_status(c: sqlite3.Connection = Depends(conn)):
+    from . import telegram
+
+    return {**_tg(telegram.TelegramService.status, timeout=30), "channels": telegram.channels(c)}
+
+
+@app.post("/api/telegram/login")
+def telegram_login(payload: dict = Body(...)):
+    from . import telegram
+
+    return _tg(telegram.TelegramService.send_code, (payload.get("phone") or "").strip())
+
+
+@app.post("/api/telegram/code")
+def telegram_code(payload: dict = Body(...)):
+    from . import telegram
+
+    return _tg(telegram.TelegramService.submit_code, payload.get("code") or "")
+
+
+@app.post("/api/telegram/password")
+def telegram_password(payload: dict = Body(...)):
+    from . import telegram
+
+    return _tg(telegram.TelegramService.submit_password, payload.get("password") or "")
+
+
+@app.post("/api/telegram/logout")
+def telegram_logout():
+    from . import telegram
+
+    _tg(telegram.TelegramService.logout)
+    return {"ok": True}
+
+
+@app.post("/api/telegram/refresh")
+def telegram_refresh():
+    from . import telegram
+
+    return {"channels": _tg(telegram.TelegramService.refresh_channels)}
+
+
+@app.post("/api/telegram/channels/{channel_id}")
+def telegram_follow(channel_id: int, payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    from . import telegram
+
+    telegram.init_schema(c)
+    n = c.execute("UPDATE tg_channel SET follow = ? WHERE id = ?", (1 if payload.get("follow") else 0, channel_id)).rowcount
+    c.commit()
+    if not n:
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+@app.post("/api/telegram/poll")
+def telegram_poll():
+    from . import telegram
+
+    telegram.service().run_soon(telegram.service().poll())
+    return {"started": True}
 
 
 @app.get("/api/extraction")
@@ -493,14 +636,14 @@ def _worker() -> None:
         try:
             c = db.connect(DB_PATH)
             db.init(c)
-            for thread_id in pending(c, settle_seconds=0 if _worker_state.get("manual") else 90):
+            for source_id, thread_id in pending(c, settle_seconds=90):
                 _worker_state["busy"] = thread_id
                 try:
-                    r = extract_thread(c, thread_id)
-                    print(f"[extract] thread {thread_id}: {r['claims']} claims, {len(r['builds'])} builds, ${r['cost_usd']}", flush=True)
+                    r = extract_thread(c, thread_id, source_id)
+                    print(f"[extract] {source_id}/{thread_id}: {r['claims']} claims, {r['events']} events, {len(r['builds'])} builds, ${r['cost_usd']}", flush=True)
                 except Exception as e:  # keep the worker alive; the error is shown on the Captures page
-                    record_error(c, thread_id, f"{type(e).__name__}: {e}")
-                    print(f"[extract] thread {thread_id} failed: {e}", flush=True)
+                    record_error(c, source_id, thread_id, f"{type(e).__name__}: {e}")
+                    print(f"[extract] {source_id}/{thread_id} failed: {e}", flush=True)
                 finally:
                     _worker_state["busy"] = None
             c.close()
@@ -508,8 +651,16 @@ def _worker() -> None:
             print(f"[extract] worker error: {e}", flush=True)
 
 
+# Apply schema changes/migrations once at startup, before serving requests.
+_c = db.connect(DB_PATH)
+db.init(_c)
+_c.close()
+
 if os.environ.get("REPAGG_WORKER", "1") != "0":
     threading.Thread(target=_worker, name="extract-worker", daemon=True).start()
+    from . import telegram as _telegram
+
+    _telegram.service()  # polls followed channels once logged in
 
 
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)

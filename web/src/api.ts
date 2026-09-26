@@ -14,6 +14,7 @@ export type Meta = {
   tiers: string[];
   families: string[];
   factories: { id: string; name: string; status: string }[];
+  factories_to_review: number;
   sources: { id: string; kind: string; name: string; trust: number }[];
 };
 
@@ -206,12 +207,30 @@ export function fetchJson<T>(path: string): Promise<T> {
   return cache.get(path) as Promise<T>;
 }
 
-export async function postJson<T>(path: string): Promise<T> {
-  const r = await fetch(BASE + path, { method: "POST" });
-  if (!r.ok) throw new Error(`${r.status} ${path}`);
+export async function postJson<T>(path: string, body?: unknown, method = "POST"): Promise<T> {
+  const r = await fetch(BASE + path, {
+    method,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `${r.status} ${path}`);
   cache.clear();
-  return r.json();
+  return data as T;
 }
+
+export type AdminFactory = {
+  id: string;
+  name: string;
+  status: string;
+  notes: string | null;
+  needs_review: number;
+  builds: number;
+  claims: number;
+  threads: number;
+  aliases: string[];
+  build_list: { id: string; reference_id: string; version: string }[];
+};
 
 export function useApi<T>(path: string | null): { data: T | undefined; error: Error | undefined } {
   const [state, setState] = useState<{ path: string | null; data?: T; error?: Error }>({ path });
@@ -231,6 +250,8 @@ export function useApi<T>(path: string | null): { data: T | undefined; error: Er
 }
 
 export type CapturedThread = {
+  source_id: string;
+  source_kind: string;
   thread_id: string;
   url: string;
   title: string;
@@ -252,3 +273,22 @@ export type CapturedThread = {
 export type Extraction = { configured: boolean; model: string; effort: string; busy: string | null };
 export type Source = { url: string; title: string; forum: string | null; summary: string | null; source: string; findings: number; first_post: string; last_post: string };
 export type CaptureLog = { id: number; thread_id: string; page: number; captured_at: string; posts: number; new_posts: number; photos: number; status: string };
+
+export type TgChannel = {
+  id: number;
+  username: string | null;
+  title: string;
+  follow: number;
+  last_polled: string | null;
+  error: string | null;
+  backfill_done: number;
+  messages: number;
+  findings: number;
+  events: number;
+  prices: number;
+  summary: string | null;
+  extracted_at: string | null;
+  extract_cost: number | null;
+  extract_error: string | null;
+};
+export type TgStatus = { configured: boolean; authorized: boolean; account: string | null; step: string | null; polling: boolean; error?: string; channels: TgChannel[] };

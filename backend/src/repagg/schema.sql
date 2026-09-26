@@ -229,3 +229,8 @@ CREATE TABLE IF NOT EXISTS capture (
     status        TEXT NOT NULL DEFAULT 'ok',
     error         TEXT
 );
+
+-- Names the owner marked "not a factory" (e.g. dealers); extraction skips them.
+CREATE TABLE IF NOT EXISTS factory_block (
+    alias TEXT PRIMARY KEY COLLATE NOCASE
+);

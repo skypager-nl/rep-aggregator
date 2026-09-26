@@ -13,6 +13,7 @@ const NAV = [
   { to: "/pivot", label: "Pivot" },
   { to: "/compare", label: "Compare" },
   { to: "/captures", label: "Captures" },
+  { to: "/telegram", label: "Telegram" },
 ];
 
 export default function Layout() {
@@ -54,6 +55,7 @@ export default function Layout() {
                     <span className="relative">
                       {n.label}
                       {n.to === "/compare" && compared.length > 0 && <span className="ml-1.5 font-mono text-[10.5px] text-gold">{compared.length}</span>}
+                      {n.to === "/factories" && (meta?.factories_to_review ?? 0) > 0 && <span className="ml-1.5 inline-block h-1.5 w-1.5 -translate-y-1.5 rounded-full bg-warn" title="Factories to review" />}
                     </span>
                   </>
                 )}
