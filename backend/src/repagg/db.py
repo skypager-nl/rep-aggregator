@@ -15,8 +15,23 @@ def connect(path=DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them.
+MIGRATIONS = {
+    "post": {"thread_id": "TEXT", "page": "INTEGER", "number": "INTEGER", "reactions": "INTEGER", "is_starter": "INTEGER", "quotes": "TEXT"},
+    "author": {"external_id": "TEXT", "reactions": "INTEGER", "banners": "TEXT"},
+    "photo": {"url": "TEXT"},
+}
+
+
 def init(conn: sqlite3.Connection) -> None:
     conn.executescript(files("repagg").joinpath("schema.sql").read_text())
+    for table, cols in MIGRATIONS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, typ in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS photo_post_url ON photo(post_id, url)")
+    conn.execute("CREATE INDEX IF NOT EXISTS post_thread ON post(source_id, thread_id)")
     conn.commit()
 
 

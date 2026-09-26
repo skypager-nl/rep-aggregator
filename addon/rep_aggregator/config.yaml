@@ -1,11 +1,19 @@
 name: Rep Index
-version: "0.1.1"
+version: "0.2.2"
 slug: rep_aggregator
 description: Replica watch aggregator — builds, factories, defects and tiers
 arch:
   - aarch64
 init: false
 ingress: true
+map:
+  - share:rw
+# LAN port for the Chrome extension. Only POST /api/capture with the token is
+# accepted here; the site itself stays behind HA's login (ingress).
+ports:
+  8099/tcp: 8766
+ports_description:
+  8099/tcp: Capture endpoint for the Rep Index Chrome extension (token required)
 ingress_port: 8099
 panel_icon: mdi:watch
 panel_title: Rep Index
@@ -21,6 +29,11 @@ options:
     rwi: false
     telegram: false
   max_disk_gb: 15
+  # RWI crawler only. Fails closed: no proxy -> no crawl. e.g. host "amsterdam.nl.socks.nordhold.net:1080"
+  rwi_proxy:
+    host: ""
+    username: ""
+    password: ""
 schema:
   anthropic_api_key: password
   demo_data: bool
@@ -29,3 +42,7 @@ schema:
     rwi: bool
     telegram: bool
   max_disk_gb: int(1,40)
+  rwi_proxy:
+    host: str?
+    username: str?
+    password: password?

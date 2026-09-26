@@ -1,17 +1,52 @@
 """HTTP API + static site. Served behind Home Assistant ingress, so every URL the
 frontend uses is relative -- ingress mounts us under /api/hassio_ingress/<token>/."""
 
+import hmac
+import os
+import secrets
 import sqlite3
 from collections import defaultdict
 from collections.abc import Iterator
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db, scoring
-from .config import DB_PATH, PHOTO_DIR, STATIC_DIR
+from .config import DATA_DIR, DB_PATH, PHOTO_DIR, STATIC_DIR
 
 app = FastAPI(title="repagg", docs_url="/api/docs", openapi_url="/api/openapi.json")
+
+
+# HA ingress proxies from the Supervisor; it has already checked the HA login.
+TRUSTED = set(os.environ.get("REPAGG_TRUSTED", "172.30.32.2,127.0.0.1,::1").split(","))
+TOKEN_FILE = DATA_DIR / "capture_token"
+
+
+def capture_token() -> str:
+    if not TOKEN_FILE.exists():
+        TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TOKEN_FILE.write_text(secrets.token_urlsafe(24))
+        TOKEN_FILE.chmod(0o600)
+    return TOKEN_FILE.read_text().strip()
+
+
+def _trusted(request: Request) -> bool:
+    return request.client is not None and request.client.host in TRUSTED
+
+
+@app.middleware("http")
+async def gate(request: Request, call_next):
+    """Direct (non-ingress) access may only submit captures, and only with the token."""
+    if not _trusted(request):
+        if request.url.path == "/api/health" and request.method == "GET":
+            return await call_next(request)
+        if request.url.path not in ("/api/capture", "/api/capture/photo", "/api/capture/mhtml") or request.method != "POST":
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        sent = request.headers.get("x-capture-token", "")
+        if not hmac.compare_digest(sent, capture_token()):
+            return JSONResponse({"detail": "bad capture token"}, status_code=401)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -350,6 +385,102 @@ def pivot(
         "dims": list(PIVOT_DIMS),
         "measures": list(PIVOT_MEASURES),
     }
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+@app.post("/api/capture")
+def capture(payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    """A page the owner viewed in their own browser, sent by the extension."""
+    from .ingest import ingest_rwi_page
+
+    url, html = payload.get("url") or "", payload.get("html") or ""
+    if "forum.replica-watch.info/threads/" not in url or len(html) < 1000:
+        raise HTTPException(400, "expected an RWI thread page")
+    if len(html) > 8_000_000:
+        raise HTTPException(413, "page too large")
+    try:
+        return ingest_rwi_page(c, html, url, payload.get("captured_at"))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/capture/photo")
+async def capture_photo(request: Request, url: str, c: sqlite3.Connection = Depends(conn)):
+    """Photo bytes fetched by the owner's browser during a capture."""
+    from .ingest import MAX_PHOTO_BYTES, store_photo
+
+    data = await request.body()
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(413, "photo too large")
+    if not c.execute("SELECT 1 FROM photo WHERE url = ?", (url,)).fetchone():
+        raise HTTPException(404, "unknown photo — capture its page first")
+    try:
+        return store_photo(c, url, data, request.headers.get("content-type", ""))
+    except ValueError as e:
+        raise HTTPException(415, str(e))
+
+
+@app.post("/api/capture/mhtml")
+async def capture_mhtml(request: Request, c: sqlite3.Connection = Depends(conn)):
+    """A whole page as Chrome saved it, including the photos it displayed."""
+    from .ingest import ingest_mhtml
+
+    data = await request.body()
+    if len(data) > 150_000_000:
+        raise HTTPException(413, "capture too large")
+    try:
+        result = ingest_mhtml(c, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return result
+
+
+@app.get("/api/capture/setup")
+def capture_setup():
+    """Token for the extension's settings. Only reachable through ingress (HA login)."""
+    return {"token": capture_token(), "port": int(os.environ.get("REPAGG_CAPTURE_PORT", "8766"))}
+
+
+@app.get("/api/captures")
+def captures(c: sqlite3.Connection = Depends(conn)):
+    threads = [dict(r) for r in c.execute(
+        """
+        SELECT t.external_id AS thread_id, t.url, t.title, t.forum, t.pages, t.first_seen, t.last_captured,
+               COUNT(DISTINCT p.page) AS pages_captured, COUNT(DISTINCT p.id) AS posts,
+               (SELECT COUNT(*) FROM photo ph JOIN post pp ON pp.id = ph.post_id WHERE pp.source_id = t.source_id AND pp.thread_id = t.external_id) AS photos,
+               (SELECT COUNT(*) FROM photo ph JOIN post pp ON pp.id = ph.post_id WHERE pp.source_id = t.source_id AND pp.thread_id = t.external_id AND ph.path != '') AS photos_stored
+        FROM thread t LEFT JOIN post p ON p.source_id = t.source_id AND p.thread_id = t.external_id
+        GROUP BY t.source_id, t.external_id ORDER BY t.last_captured DESC
+        """
+    )]
+    log = [dict(r) for r in c.execute("SELECT * FROM capture ORDER BY id DESC LIMIT 50")]
+    return {"threads": threads, "log": log}
+
+
+@app.get("/api/captures/{thread_id}")
+def captured_thread(thread_id: str, c: sqlite3.Connection = Depends(conn)):
+    t = c.execute("SELECT * FROM thread WHERE source_id = 'rwi' AND external_id = ?", (thread_id,)).fetchone()
+    if not t:
+        raise HTTPException(404)
+    posts = [dict(r) for r in c.execute(
+        """
+        SELECT p.id, p.external_id, p.number, p.page, p.posted_at, p.body, p.quotes, p.reactions, p.is_starter, p.url,
+               a.handle, a.joined, a.post_count, a.reputation, a.banners
+        FROM post p LEFT JOIN author a ON a.id = p.author_id
+        WHERE p.source_id = 'rwi' AND p.thread_id = ? ORDER BY p.page, p.number
+        """,
+        (thread_id,),
+    )]
+    photos = defaultdict(list)
+    for r in c.execute("SELECT post_id, url, path FROM photo WHERE post_id IN (SELECT id FROM post WHERE source_id = 'rwi' AND thread_id = ?) ORDER BY id", (thread_id,)):
+        photos[r["post_id"]].append({"url": r["url"], "path": r["path"] or None})
+    for p in posts:
+        p["photos"] = photos.get(p["id"], [])
+    return {**dict(t), "posts": posts}
 
 
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)

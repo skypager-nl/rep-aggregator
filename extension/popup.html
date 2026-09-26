@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { margin: 0; width: 280px; padding: 16px; background: #0a0a0b; color: #ece6da; font: 13px/1.45 -apple-system, BlinkMacSystemFont, Inter, sans-serif; }
+      h1 { margin: 0 0 4px; font: italic 22px Georgia, serif; color: #c9a46a; }
+      p { margin: 0 0 12px; color: #8f8a80; }
+      button { display: block; width: 100%; margin-top: 8px; padding: 9px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.16); background: transparent; color: #ece6da; font: inherit; cursor: pointer; }
+      button.primary { background: #ece6da; color: #0a0a0b; border-color: #ece6da; font-weight: 600; }
+      button:disabled { opacity: .4; cursor: default; }
+      a { color: #c9a46a; }
+      .note { margin-top: 12px; font-size: 11.5px; color: #5d5952; }
+    </style>
+  </head>
+  <body>
+    <h1>Rep Index</h1>
+    <p id="status">Checking this tab…</p>
+    <button id="thread" class="primary" disabled>Capture whole thread</button>
+    <button id="page" disabled>Capture this page only</button>
+    <div class="note">Walks the thread in this tab, a few seconds per page (max 30), then brings you back. <a href="#" id="opts">Settings</a></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

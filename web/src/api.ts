@@ -222,3 +222,36 @@ export function useApi<T>(path: string | null): { data: T | undefined; error: Er
   // Don't show a previous path's data while the next one loads.
   return state.path === path ? { data: state.data, error: state.error } : { data: undefined, error: undefined };
 }
+
+export type CapturedThread = {
+  thread_id: string;
+  url: string;
+  title: string;
+  forum: string | null;
+  pages: number;
+  pages_captured: number;
+  posts: number;
+  photos: number;
+  photos_stored: number;
+  first_seen: string;
+  last_captured: string;
+};
+export type CaptureLog = { id: number; thread_id: string; page: number; captured_at: string; posts: number; new_posts: number; photos: number; status: string };
+export type CapturedPost = {
+  id: number;
+  external_id: string;
+  number: number | null;
+  page: number;
+  posted_at: string;
+  body: string;
+  quotes: string | null;
+  reactions: number | null;
+  is_starter: number;
+  url: string;
+  handle: string;
+  joined: string | null;
+  post_count: number | null;
+  reputation: number;
+  banners: string | null;
+  photos: { url: string; path: string | null }[];
+};

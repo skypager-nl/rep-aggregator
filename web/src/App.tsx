@@ -1,6 +1,8 @@
 import { HashRouter, Route, Routes } from "react-router";
 import Layout from "./components/Layout";
 import Build from "./pages/Build";
+import CapturedThread from "./pages/CapturedThread";
+import Captures from "./pages/Captures";
 import Compare from "./pages/Compare";
 import Explore from "./pages/Explore";
 import Factories from "./pages/Factories";
@@ -25,6 +27,8 @@ export default function App() {
           <Route path="explore" element={<Explore />} />
           <Route path="pivot" element={<Pivot />} />
           <Route path="compare" element={<Compare />} />
+          <Route path="captures" element={<Captures />} />
+          <Route path="captures/:id" element={<CapturedThread />} />
         </Route>
       </Routes>
     </HashRouter>

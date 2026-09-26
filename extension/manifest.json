@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Rep Index Capture",
+  "version": "0.3.0",
+  "description": "Send RWI threads you are reading to your own Rep Index. Captures only when you click; never runs in the background.",
+  "action": {
+    "default_title": "Rep Index",
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "pageCapture"
+  ],
+  "host_permissions": [
+    "https://forum.replica-watch.info/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html"
+}

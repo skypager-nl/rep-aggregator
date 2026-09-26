@@ -200,3 +200,32 @@ CREATE TABLE IF NOT EXISTS reference_photo (
     source_url   TEXT,
     UNIQUE (reference_id, view, path)
 );
+
+-- Browser captures (owner's own visits, sent by the extension) -----------------
+
+CREATE TABLE IF NOT EXISTS thread (
+    source_id     TEXT NOT NULL REFERENCES source(id),
+    external_id   TEXT NOT NULL,
+    url           TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    forum         TEXT,
+    pages         INTEGER NOT NULL DEFAULT 1,
+    first_seen    TEXT NOT NULL,
+    last_captured TEXT NOT NULL,
+    PRIMARY KEY (source_id, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS capture (
+    id            INTEGER PRIMARY KEY,
+    source_id     TEXT NOT NULL REFERENCES source(id),
+    thread_id     TEXT NOT NULL,
+    page          INTEGER NOT NULL,
+    url           TEXT NOT NULL,
+    captured_at   TEXT NOT NULL,
+    posts         INTEGER NOT NULL,
+    new_posts     INTEGER NOT NULL,
+    photos        INTEGER NOT NULL,
+    raw_path      TEXT,
+    status        TEXT NOT NULL DEFAULT 'ok',
+    error         TEXT
+);

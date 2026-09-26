@@ -12,6 +12,7 @@ const NAV = [
   { to: "/explore", label: "Explore" },
   { to: "/pivot", label: "Pivot" },
   { to: "/compare", label: "Compare" },
+  { to: "/captures", label: "Captures" },
 ];
 
 export default function Layout() {

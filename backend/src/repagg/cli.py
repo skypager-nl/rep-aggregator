@@ -22,6 +22,12 @@ def main() -> None:
     imp = sub.add_parser("import-photos", help="register a folder of <REF>-<view> genuine photos")
     imp.add_argument("dir")
     imp.add_argument("--credit", default="© Rolex")
+    probe = sub.add_parser("rwi-probe", help="owner-approved 2-request RWI reachability test via the proxy")
+    probe.add_argument("--out", required=True)
+    probe.add_argument("--only", help="comma-separated target names, e.g. rss")
+    ing = sub.add_parser("ingest-file", help="ingest a saved RWI thread page (.html or .mhtml)")
+    ing.add_argument("file")
+    sub.add_parser("egress-check", help="verify the RWI crawler's proxy exits away from home (IP-echo only)")
     serve = sub.add_parser("serve", help="run the web app")
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8099)
@@ -31,6 +37,26 @@ def main() -> None:
         import uvicorn
 
         uvicorn.run("repagg.api:app", host=args.host, port=args.port, log_level="info")
+        return
+
+    if args.cmd == "rwi-probe":
+        import json
+
+        from .probe import run
+
+        only = set(args.only.split(",")) if args.only else None
+        print(json.dumps(run(Path(args.out), only), indent=2))
+        return
+
+    if args.cmd == "egress-check":
+        from .net import EgressError, rwi_proxy_url, safe_proxy_label, verify_egress
+
+        url = rwi_proxy_url()
+        try:
+            exit_ip = verify_egress(url)
+        except EgressError as e:
+            raise SystemExit(f"BLOCKED: {e}")
+        print(f"OK: {safe_proxy_label(url)} exits from {exit_ip} (not home)")
         return
 
     conn = db.connect(DB_PATH)
@@ -53,6 +79,13 @@ def main() -> None:
                 n += 1
         conn.commit()
         print(f"registered {n} photos from {args.dir}")
+    elif args.cmd == "ingest-file":
+        from .ingest import ingest_rwi_page
+        from .rwi_parse import html_from_mhtml
+
+        f = Path(args.file)
+        html = html_from_mhtml(f) if f.suffix == ".mhtml" else f.read_text()
+        print(ingest_rwi_page(conn, html, url=""))
     elif args.cmd == "score":
         today = date.today()
         previous = db.get_meta(conn, "latest_as_of")
