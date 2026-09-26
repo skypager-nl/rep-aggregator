@@ -103,7 +103,7 @@ export default function Build() {
         </div>
 
         <div className="lg:pt-6">
-          <Link to={`/ref/${b.reference_id}`} className="eyebrow transition-colors hover:text-paper">
+          <Link to={`/ref/${encodeURIComponent(b.reference_id)}`} className="eyebrow transition-colors hover:text-paper">
             {b.reference_name} · <span className="text-gold">{b.reference_id}</span>
           </Link>
           <h1 className="mt-4 font-display text-[56px] leading-[0.92] tracking-tight md:text-[84px]">
@@ -155,7 +155,7 @@ export default function Build() {
           </div>
 
           <div className="mt-8">
-            <div className="eyebrow mb-3">Other builds of this reference</div>
+            <div className="eyebrow mb-3">Other versions of this reference</div>
             <div className="flex flex-wrap gap-1.5">
               {b.siblings.map((s) => (
                 <Link key={s.id} to={`/build/${s.id}`} className={cx("inline-flex items-center gap-2 rounded-full border border-line py-1 pl-1 pr-3 text-[13px] transition-colors hover:border-line-strong", s.status !== "current" && "opacity-55")}>
@@ -297,7 +297,7 @@ export default function Build() {
       {/* sources: links only — no posts, usernames or quotes */}
       <section className="mt-20">
         <SectionHead eyebrow={`${b.sources.length} thread${b.sources.length === 1 ? "" : "s"} analysed`} title="Sources" />
-        {!b.sources.length && <p className="text-sm text-muted">No analysed threads for this build yet.</p>}
+        {!b.sources.length && <p className="text-sm text-muted">No analysed threads for this version yet.</p>}
         <ul>
           {b.sources.map((src) => (
             <li key={src.url} className="border-b border-line py-4 last:border-0">

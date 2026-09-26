@@ -144,7 +144,7 @@ def _drop_from_thread_builds(conn: sqlite3.Connection, removed: set[str]) -> Non
 
 
 def _build_id(factory_id: str, reference_id: str, version: str) -> str:
-    return f"{factory_id}-{reference_id.lower()}-{version.lower()}"
+    return f"{factory_id}-{re.sub(r'[^a-z0-9]+', '', reference_id.lower())}-{version.lower()}"
 
 
 def _require(conn: sqlite3.Connection, factory_id: str) -> sqlite3.Row:
@@ -178,4 +178,96 @@ def blocked(conn: sqlite3.Connection) -> list[str]:
 
 def unblock(conn: sqlite3.Connection, alias: str) -> None:
     conn.execute("DELETE FROM factory_block WHERE alias = ?", (alias,))
+    conn.commit()
+
+
+# ---- references (the genuine models) -----------------------------------------------
+
+def list_references(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT r.id, r.brand, r.family, r.name, COALESCE(r.needs_review, 0) AS needs_review,
+               (SELECT COUNT(*) FROM build b WHERE b.reference_id = r.id) AS builds,
+               (SELECT COUNT(*) FROM claim c JOIN build b ON b.id = c.build_id WHERE b.reference_id = r.id) AS claims
+        FROM reference r WHERE COALESCE(r.kind, 'reference') = 'reference' ORDER BY needs_review DESC, r.brand, r.id
+        """
+    ).fetchall()
+    aliases: dict[str, list[str]] = {}
+    for alias, rid in conn.execute("SELECT alias, reference_id FROM reference_alias ORDER BY alias COLLATE NOCASE"):
+        if alias != rid:
+            aliases.setdefault(rid, []).append(alias)
+    return [{**dict(r), "aliases": aliases.get(r["id"], [])} for r in rows]
+
+
+def update_reference(conn: sqlite3.Connection, ref_id: str, brand: str | None = None, name: str | None = None,
+                     family: str | None = None, reviewed: bool | None = None) -> None:
+    if not conn.execute("SELECT 1 FROM reference WHERE id = ?", (ref_id,)).fetchone():
+        raise LookupError(f"unknown reference {ref_id}")
+    for col, val in (("brand", brand), ("name", name), ("family", family)):
+        if val is not None and val.strip():
+            conn.execute(f"UPDATE reference SET {col} = ? WHERE id = ?", (val.strip(), ref_id))
+    if reviewed is not None:
+        conn.execute("UPDATE reference SET needs_review = ?, notes = CASE WHEN ? THEN NULL ELSE notes END WHERE id = ?",
+                     (0 if reviewed else 1, reviewed, ref_id))
+    conn.commit()
+
+
+def add_reference_alias(conn: sqlite3.Connection, ref_id: str, alias: str) -> None:
+    alias = alias.strip()
+    other = conn.execute("SELECT reference_id FROM reference_alias WHERE alias = ? AND reference_id != ?", (alias, ref_id)).fetchone()
+    if other:
+        raise ValueError(f"“{alias}” already belongs to {other[0]} — merge instead")
+    conn.execute("INSERT OR IGNORE INTO reference_alias VALUES (?, ?)", (alias, ref_id))
+    conn.commit()
+
+
+def merge_reference(conn: sqlite3.Connection, source: str, target: str) -> dict:
+    if source == target:
+        raise ValueError("can't merge a reference into itself")
+    for r in (source, target):
+        if not conn.execute("SELECT 1 FROM reference WHERE id = ?", (r,)).fetchone():
+            raise LookupError(f"unknown reference {r}")
+    moved = 0
+    for b in conn.execute("SELECT * FROM build WHERE reference_id = ?", (source,)).fetchall():
+        new_id = _build_id(b["factory_id"], target, b["version"])
+        if not conn.execute("SELECT 1 FROM build WHERE id = ?", (new_id,)).fetchone():
+            conn.execute("INSERT INTO build(id, reference_id, factory_id, version, movement, released, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (new_id, target, b["factory_id"], b["version"], b["movement"], b["released"], b["status"]))
+        _rekey_build(conn, b["id"], new_id)
+        moved += 1
+    conn.execute("UPDATE OR IGNORE reference_alias SET reference_id = ? WHERE reference_id = ?", (target, source))
+    conn.execute("DELETE FROM reference_alias WHERE reference_id = ?", (source,))
+    conn.execute("INSERT OR IGNORE INTO reference_alias VALUES (?, ?)", (source, target))
+    conn.execute("DELETE FROM reference_photo WHERE reference_id = ?", (source,))
+    conn.execute("DELETE FROM reference WHERE id = ?", (source,))
+    _rescore(conn)
+    return {"moved_builds": moved, "into": target}
+
+
+def discard_reference(conn: sqlite3.Connection, ref_id: str) -> dict:
+    """Not a real reference: remove it and every version/finding attached to it."""
+    ids = [r[0] for r in conn.execute("SELECT id FROM build WHERE reference_id = ?", (ref_id,))]
+    marks = ",".join("?" * len(ids)) or "NULL"
+    counts = {"builds": len(ids)}
+    for table in ("claim", "qc_verdict", "price_point", "event", "score", "tier", "defect"):
+        counts[table] = conn.execute(f"DELETE FROM {table} WHERE build_id IN ({marks})", ids).rowcount
+    conn.execute(f"UPDATE photo SET build_id = NULL WHERE build_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM build WHERE id IN ({marks})", ids)
+    conn.execute("DELETE FROM reference_alias WHERE reference_id = ?", (ref_id,))
+    conn.execute("DELETE FROM reference_photo WHERE reference_id = ?", (ref_id,))
+    conn.execute("DELETE FROM reference WHERE id = ?", (ref_id,))
+    _drop_from_thread_builds(conn, set(ids))
+    _rescore(conn)
+    return counts
+
+
+def list_new_models(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        """SELECT m.id, b.name AS brand, m.name,
+                  (SELECT COUNT(*) FROM reference r JOIN build bu ON bu.reference_id = r.id WHERE r.model_id = m.id) AS builds
+           FROM model m JOIN brand b ON b.id = m.brand_id WHERE m.needs_review = 1 ORDER BY b.name, m.name""")]
+
+
+def confirm_model(conn: sqlite3.Connection, model_id: str) -> None:
+    conn.execute("UPDATE model SET needs_review = 0 WHERE id = ?", (model_id,))
     conn.commit()

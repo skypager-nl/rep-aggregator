@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, Copy, ExternalLink, Eye, EyeOff, Loader2, Puzzle, RotateCw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { postJson, useApi, type CaptureLog, type CapturedThread, type Extraction } from "../api";
+import { postJson, useApi, type CaptureLog, type CapturedThread, type Extraction, type RwgStatus } from "../api";
 import { ErrorNote, PageLoading, SectionHead } from "../components/ui";
 import { ago, cx, fmtDate } from "../lib/format";
 
@@ -51,6 +51,8 @@ export default function Captures() {
         </section>
 
         <aside className="space-y-10">
+          {ex && <Budget ex={ex} />}
+          <RwgCard nonce={nonce} onChange={refresh} />
           <Setup />
           <div>
             <SectionHead eyebrow="Last 50" title="Log" />
@@ -169,6 +171,79 @@ function Field({ label, value, onCopy, copied, extra }: { label: string; value: 
         <button onClick={onCopy} className="text-muted hover:text-paper" aria-label={`Copy ${label}`}>
           {copied ? <Check size={14} className="text-good" /> : <Copy size={14} />}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function Budget({ ex }: { ex: Extraction }) {
+  const pct = Math.min(100, (100 * ex.spent_today) / ex.daily_budget);
+  return (
+    <div className="rounded-2xl border border-line bg-panel p-5">
+      <div className="flex items-baseline justify-between">
+        <span className="font-display text-2xl leading-none">Analysis budget</span>
+        <span className="tnum text-sm text-muted">
+          ${ex.spent_today.toFixed(2)} / ${ex.daily_budget.toFixed(2)} today
+        </span>
+      </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className={cx("h-full", ex.budget_reached ? "bg-warn" : "bg-gold")} style={{ width: `${pct}%` }} />
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        {ex.queued} thread{ex.queued === 1 ? "" : "s"} waiting{ex.budget_reached ? " — daily budget reached, continuing tomorrow" : ""}. Your own captures go first.
+      </p>
+    </div>
+  );
+}
+
+function RwgCard({ nonce, onChange }: { nonce: number; onChange: () => void }) {
+  const { data: s } = useApi<RwgStatus>(`rwg?n=${nonce}`);
+  if (!s) return null;
+  const state = s.paused ? "Paused" : !s.enabled ? "Off" : s.last_error ? "Waiting" : "Collecting";
+  const tone = s.paused ? "text-bad border-bad/30" : !s.enabled ? "text-muted border-line" : s.last_error ? "text-warn border-warn/30" : "text-good border-good/30";
+  return (
+    <div className="rounded-2xl border border-line bg-panel p-5">
+      <div className="flex items-center justify-between">
+        <span className="font-display text-2xl leading-none">RWG collector</span>
+        <span className={cx("rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider", tone)}>{state}</span>
+      </div>
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-[13px]">
+        <div>
+          <dt className="eyebrow">Threads found</dt>
+          <dd className="tnum">{s.topics_known.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt className="eyebrow">Fully read</dt>
+          <dd className="tnum">{s.topics_complete.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt className="eyebrow">Requests today</dt>
+          <dd className="tnum">
+            {s.requests_today} / {s.daily_cap}
+          </dd>
+        </div>
+        <div>
+          <dt className="eyebrow">Sections backfilled</dt>
+          <dd className="tnum">
+            {s.forums_backfilled} / {s.forums}
+          </dd>
+        </div>
+      </dl>
+      {s.exit && <p className="mt-3 font-mono text-[11px] text-faint">via {s.exit}</p>}
+      {!s.enabled && <p className="mt-3 text-xs text-muted">Enable in Settings → Apps → Rep Index → Configuration → collectors → rwg. Only runs through the VPN route.</p>}
+      {s.paused && <p className="mt-3 text-xs text-bad">{s.pause_reason}</p>}
+      {!s.paused && s.last_error && <p className="mt-3 text-xs text-warn">{s.last_error}</p>}
+      <div className="mt-4 flex gap-2">
+        {s.paused && (
+          <button onClick={() => postJson("rwg/resume").then(onChange)} className="rounded-full border border-line-strong px-3 py-1 text-xs hover:bg-white/5">
+            Resume
+          </button>
+        )}
+        {s.enabled && !s.paused && (
+          <button onClick={() => postJson("rwg/run").then(() => setTimeout(onChange, 1500))} className="rounded-full border border-line-strong px-3 py-1 text-xs hover:bg-white/5">
+            Run a cycle now
+          </button>
+        )}
       </div>
     </div>
   );

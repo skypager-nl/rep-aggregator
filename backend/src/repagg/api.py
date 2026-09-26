@@ -79,7 +79,7 @@ def _build_summaries(c: sqlite3.Connection, where: str = "1=1", params: tuple = 
     rows = c.execute(
         f"""
         SELECT b.*, f.name AS factory, f.status AS factory_status,
-               r.family, r.name AS reference_name, r.dial_color, r.bezel_color, r.metal_color,
+               r.brand, r.family, r.name AS reference_name, r.dial_color, r.bezel_color, r.metal_color,
                (SELECT path FROM reference_photo rp WHERE rp.reference_id = r.id ORDER BY rp.view != 'front', rp.id LIMIT 1) AS ref_photo,
                t.tier, t.rank, t.controversy, pt.tier AS prev_tier,
                so.score, so.lower, so.n AS claims,
@@ -142,6 +142,11 @@ def meta(c: sqlite3.Connection = Depends(conn)):
         "aspects": [{"id": a, "label": label, "weight": w} for a, label, w in scoring.ASPECTS],
         "tiers": [t for t, _ in scoring.TIERS],
         "families": [r[0] for r in c.execute("SELECT DISTINCT family FROM reference ORDER BY family")],
+        "brands": [dict(r) for r in c.execute(
+            """SELECT r.brand, COUNT(DISTINCT r.id) AS references_, COUNT(DISTINCT b.id) AS builds
+               FROM reference r LEFT JOIN build b ON b.reference_id = r.id GROUP BY r.brand ORDER BY builds DESC, r.brand""")],
+        "references_to_review": c.execute("SELECT COUNT(*) FROM reference WHERE needs_review = 1").fetchone()[0]
+            + c.execute("SELECT COUNT(*) FROM model WHERE needs_review = 1").fetchone()[0],
         "factories": [dict(r) for r in c.execute("SELECT id, name, status FROM factory ORDER BY name")],
         "factories_to_review": c.execute("SELECT COUNT(*) FROM factory WHERE needs_review = 1").fetchone()[0],
         "sources": [dict(r) for r in c.execute("SELECT id, kind, name, trust FROM source ORDER BY trust DESC")],
@@ -152,7 +157,7 @@ def meta(c: sqlite3.Connection = Depends(conn)):
 def references(c: sqlite3.Connection = Depends(conn)):
     refs = [dict(r) for r in c.execute(
         """SELECT r.*, (SELECT path FROM reference_photo rp WHERE rp.reference_id = r.id ORDER BY rp.view != 'front', rp.id LIMIT 1) AS ref_photo
-           FROM reference r ORDER BY family, id""")]
+           FROM reference r ORDER BY brand, family, id""")]
     by_ref = defaultdict(list)
     for b in _build_summaries(c):
         by_ref[b["reference_id"]].append(b)
@@ -163,7 +168,7 @@ def references(c: sqlite3.Connection = Depends(conn)):
     return refs
 
 
-@app.get("/api/references/{ref_id}")
+@app.get("/api/references/{ref_id:path}")
 def reference(ref_id: str, c: sqlite3.Connection = Depends(conn)):
     row = c.execute("SELECT * FROM reference WHERE id = ?", (ref_id,)).fetchone()
     if not row:
@@ -320,6 +325,7 @@ def feed(c: sqlite3.Connection = Depends(conn)):
 
 
 PIVOT_DIMS = {
+    "brand": "r.brand",
     "factory": "f.name",
     "reference": "b.reference_id",
     "family": "r.family",
@@ -339,7 +345,7 @@ PIVOT_MEASURES = {
     "defect_rate": "ROUND(100.0 * AVG(cl.kind = 'defect'), 1)",
     "praise_rate": "ROUND(100.0 * AVG(cl.kind = 'praise'), 1)",
 }
-PIVOT_FILTERS = {"family": "r.family", "factory": "b.factory_id", "reference": "b.reference_id", "status": "b.status", "source_kind": "s.kind", "aspect": "cl.aspect"}
+PIVOT_FILTERS = {"brand": "r.brand", "family": "r.family", "factory": "b.factory_id", "reference": "b.reference_id", "status": "b.status", "source_kind": "s.kind", "aspect": "cl.aspect"}
 
 
 @app.get("/api/pivot")
@@ -347,6 +353,7 @@ def pivot(
     rows: str = "factory",
     cols: str | None = "aspect",
     measure: str = "score",
+    brand: list[str] = Query(default=[]),
     family: list[str] = Query(default=[]),
     factory: list[str] = Query(default=[]),
     reference: list[str] = Query(default=[]),
@@ -357,7 +364,7 @@ def pivot(
 ):
     if rows not in PIVOT_DIMS or (cols and cols not in PIVOT_DIMS) or measure not in PIVOT_MEASURES:
         raise HTTPException(400, "unknown dimension or measure")
-    filters = {"family": family, "factory": factory, "reference": reference, "status": status, "source_kind": source_kind, "aspect": aspect}
+    filters = {"brand": brand, "family": family, "factory": factory, "reference": reference, "status": status, "source_kind": source_kind, "aspect": aspect}
     where, params = ["1=1"], []
     for key, values in filters.items():
         if values:
@@ -530,6 +537,52 @@ def admin_discard(factory_id: str, c: sqlite3.Connection = Depends(conn)):
     return _admin(admin.discard, c, factory_id)
 
 
+@app.get("/api/admin/references")
+def admin_references(c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    return {"references": admin.list_references(c), "models": admin.list_new_models(c)}
+
+
+@app.post("/api/admin/models/{model_id:path}/confirm")
+def admin_model_confirm(model_id: str, c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    admin.confirm_model(c, model_id)
+    return {"ok": True}
+
+
+@app.post("/api/admin/references/{ref_id:path}/alias")
+def admin_ref_alias(ref_id: str, payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    _admin(admin.add_reference_alias, c, ref_id, payload.get("alias", ""))
+    return {"ok": True}
+
+
+@app.post("/api/admin/references/{ref_id:path}/merge")
+def admin_ref_merge(ref_id: str, payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    return _admin(admin.merge_reference, c, ref_id, payload.get("into", ""))
+
+
+@app.post("/api/admin/references/{ref_id:path}/discard")
+def admin_ref_discard(ref_id: str, c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    return _admin(admin.discard_reference, c, ref_id)
+
+
+@app.post("/api/admin/references/{ref_id:path}")
+def admin_ref_update(ref_id: str, payload: dict = Body(...), c: sqlite3.Connection = Depends(conn)):
+    from . import admin
+
+    _admin(admin.update_reference, c, ref_id, brand=payload.get("brand"), name=payload.get("name"),
+           family=payload.get("family"), reviewed=payload.get("reviewed"))
+    return {"ok": True}
+
+
 @app.delete("/api/admin/blocked/{alias}")
 def admin_unblock(alias: str, c: sqlite3.Connection = Depends(conn)):
     from . import admin
@@ -614,12 +667,46 @@ def telegram_poll():
     return {"started": True}
 
 
+# ---- RWG collector (ingress only) ------------------------------------------------
+
+@app.get("/api/rwg")
+def rwg_status(c: sqlite3.Connection = Depends(conn)):
+    from . import rwg
+
+    return rwg.status(c)
+
+
+@app.post("/api/rwg/resume")
+def rwg_resume(c: sqlite3.Connection = Depends(conn)):
+    from . import rwg
+
+    rwg.resume(c)
+    return {"ok": True}
+
+
+@app.post("/api/rwg/run")
+def rwg_run():
+    from . import rwg
+
+    threading.Thread(target=lambda: rwg.collector().run_cycle(), daemon=True).start()
+    return {"started": True}
+
+
 @app.get("/api/extraction")
 def extraction_status():
     from .extract import settings
 
+    from .extract import daily_budget, pending, spent_today
+
     cfg = settings()
-    return {"configured": bool(cfg["api_key"]), "model": cfg["model"], "effort": cfg["effort"], "busy": _worker_state.get("busy")}
+    c = db.connect(DB_PATH)
+    try:
+        queued = len(pending(c, settle_seconds=0))
+        spent = round(spent_today(c), 2)
+    finally:
+        c.close()
+    return {"configured": bool(cfg["api_key"]), "model": cfg["model"], "effort": cfg["effort"], "busy": _worker_state.get("busy"),
+            "spent_today": spent, "daily_budget": daily_budget(), "queued": queued, "budget_reached": bool(_worker_state.get("budget_reached"))}
 
 
 _worker_state: dict = {}
@@ -627,7 +714,7 @@ _worker_state: dict = {}
 
 def _worker() -> None:
     """Analyse newly captured threads in the background, one at a time."""
-    from .extract import extract_thread, pending, record_error, settings
+    from .extract import daily_budget, extract_thread, pending, record_error, settings, spent_today
 
     while True:
         time.sleep(30)
@@ -637,6 +724,10 @@ def _worker() -> None:
             c = db.connect(DB_PATH)
             db.init(c)
             for source_id, thread_id in pending(c, settle_seconds=90):
+                if spent_today(c) >= daily_budget():
+                    _worker_state["budget_reached"] = True
+                    break
+                _worker_state["budget_reached"] = False
                 _worker_state["busy"] = thread_id
                 try:
                     r = extract_thread(c, thread_id, source_id)
@@ -661,6 +752,9 @@ if os.environ.get("REPAGG_WORKER", "1") != "0":
     from . import telegram as _telegram
 
     _telegram.service()  # polls followed channels once logged in
+    from . import rwg as _rwg
+
+    _rwg.collector()  # does nothing unless collectors.rwg is enabled and the VPN route verifies
 
 
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)

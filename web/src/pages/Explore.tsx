@@ -43,6 +43,7 @@ export default function Explore() {
   const view = params.get("view") ?? "grid";
   const minScore = Number(params.get("min") ?? 0);
   const maxPrice = Number(params.get("maxp") ?? 0);
+  const brands = list("brand");
   const families = list("family");
   const factories = list("factory");
   const tiers = list("tier");
@@ -52,23 +53,31 @@ export default function Explore() {
     const needle = q.trim().toLowerCase();
     return data
       .filter((b) => status === "all" || b.status === status)
+      .filter((b) => !brands.length || brands.includes(b.brand))
       .filter((b) => !families.length || families.includes(b.family))
       .filter((b) => !factories.length || factories.includes(b.factory_id))
       .filter((b) => !tiers.length || (b.tier && tiers.includes(b.tier)))
       .filter((b) => (b.score ?? 0) >= minScore)
       .filter((b) => !maxPrice || (b.price ?? 0) <= maxPrice)
-      .filter((b) => !needle || `${b.reference_id} ${b.reference_name} ${b.factory} ${b.version} ${b.movement} ${b.family}`.toLowerCase().includes(needle))
+      .filter((b) => !needle || `${b.brand} ${b.reference_id} ${b.reference_name} ${b.factory} ${b.version} ${b.movement} ${b.family}`.toLowerCase().includes(needle))
       .sort((a, b) => SORTS[sort].key(b) - SORTS[sort].key(a));
-  }, [data, q, status, families, factories, tiers, minScore, maxPrice, sort]);
+  }, [data, q, status, brands, families, factories, tiers, minScore, maxPrice, sort]);
 
   if (error) return <ErrorNote error={error} />;
   if (!data || !meta) return <PageLoading />;
-  const activeCount = families.length + factories.length + tiers.length + (minScore ? 1 : 0) + (maxPrice ? 1 : 0) + (status !== "current" ? 1 : 0);
+  const activeCount = brands.length + families.length + factories.length + tiers.length + (minScore ? 1 : 0) + (maxPrice ? 1 : 0) + (status !== "current" ? 1 : 0);
 
   const filters = (
     <div className="space-y-8">
-      <Group label="Family">
-        {meta.families.map((f) => (
+      <Group label="Brand">
+        {meta.brands.filter((b) => b.builds > 0).map((b) => (
+          <Chip key={b.brand} active={brands.includes(b.brand)} onClick={() => toggle("brand", b.brand)}>
+            {b.brand}
+          </Chip>
+        ))}
+      </Group>
+      <Group label="Model">
+        {[...new Set(data.filter((b) => !brands.length || brands.includes(b.brand)).map((b) => b.family))].sort().map((f) => (
           <Chip key={f} active={families.includes(f)} onClick={() => toggle("family", f)}>
             {f}
           </Chip>
@@ -109,7 +118,7 @@ export default function Explore() {
     <div className="mx-auto max-w-[1360px] px-4 md:px-10">
       <header className="pb-10 pt-14">
         <div className="eyebrow mb-4">Explore</div>
-        <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">Every build</h1>
+        <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">Every version</h1>
       </header>
 
       <div className="grid gap-10 lg:grid-cols-[260px_1fr]">
@@ -124,7 +133,7 @@ export default function Explore() {
               <input
                 value={q}
                 onChange={(e) => set("q", e.target.value)}
-                placeholder="Search reference, nickname, factory, calibre…"
+                placeholder="Search brand, reference, model, factory, calibre…"
                 className="w-full bg-transparent text-sm outline-none placeholder:text-faint"
               />
             </label>
@@ -170,7 +179,7 @@ export default function Explore() {
                 <thead>
                   <tr className="eyebrow border-b border-line">
                     <th className="py-3 font-normal">Tier</th>
-                    <th className="py-3 font-normal">Build</th>
+                    <th className="py-3 font-normal">Version</th>
                     <th className="py-3 font-normal">Reference</th>
                     <th className="w-44 py-3 font-normal">Score</th>
                     <th className="py-3 text-right font-normal">GL</th>
@@ -194,7 +203,7 @@ export default function Explore() {
                           </Link>
                         </td>
                         <td className="py-3">
-                          <Link to={`/ref/${b.reference_id}`} className="font-mono text-xs hover:text-gold">
+                          <Link to={`/ref/${encodeURIComponent(b.reference_id)}`} className="font-mono text-xs hover:text-gold">
                             {b.reference_id}
                           </Link>{" "}
                           <span className="text-xs text-muted">{b.reference_name}</span>

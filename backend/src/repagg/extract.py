@@ -40,8 +40,12 @@ treat them as curated community consensus.
 - A post may discuss several builds (e.g. comparing factories). Attribute each claim to the right one.
 - Skip jokes, greetings, off-topic chatter, dealer ads, and questions with no answer.
 
-Builds
-- reference: one of the known references listed below, or "OTHER" if the watch isn't among them.
+Versions (a factory's replica of one reference; the database calls them builds)
+- brand: the genuine brand (e.g. "Rolex", "Omega", "Audemars Piguet").
+- reference: the genuine reference number if stated or unambiguous from the known list below \
+(use the listed id), else "" — never invent one. model: the model as named (e.g. "Submariner Date", \
+"Speedmaster Moonwatch", "Nautilus 5711"). Use a listed nickname's reference when the post uses it.
+- Skip versions of watches that are not replicas of a genuine model (homages, DIY builds).
 - factory: the factory name as written (e.g. "Clean", "VSF", "RICH"); dealers are not factories.
 - version: "V1", "V2", ... if stated or clearly implied by date/features; otherwise "unspecified".
 - movement: the clone calibre if mentioned (e.g. "VR3235", "JH3235"), else "".
@@ -70,7 +74,7 @@ Events: dated news the posts report — a factory releasing a new build or versi
 
 Summary: 2-3 neutral sentences stating the thread's conclusion about the build(s). No usernames.
 
-Known references (id: name):
+Known references by brand (id: name — nicknames):
 {references}
 
 Known factories and aliases:
@@ -97,7 +101,7 @@ QC verdicts: none (return an empty list).
 
 Summary: one or two neutral sentences on what this batch of messages announced.
 
-Known references (id: name):
+Known references by brand (id: name — nicknames):
 {references}
 
 Known factories and aliases:
@@ -112,12 +116,12 @@ def _enum(values, kind="string"):
     return {"type": kind, "enum": values}
 
 
-def schema(ref_ids: list[str]) -> dict:
+def schema(ref_ids: list[str] | None = None) -> dict:
     obj = lambda props: {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}  # noqa: E731
     return obj({
         "summary": STR,
         "builds": {"type": "array", "items": obj({
-            "key": STR, "reference": _enum(ref_ids + ["OTHER"]), "factory": STR, "version": STR, "movement": STR,
+            "key": STR, "brand": STR, "reference": STR, "model": STR, "factory": STR, "version": STR, "movement": STR,
         })},
         "claims": {"type": "array", "items": obj({
             "build": STR, "post": INT, "aspect": _enum(ASPECT_IDS),
@@ -147,14 +151,31 @@ def settings() -> dict:
     }
 
 
-def _system_prompt(conn: sqlite3.Connection, kind: str = "forum") -> tuple[str, list[str]]:
-    refs = conn.execute("SELECT id, name FROM reference ORDER BY id").fetchall()
+def _system_prompt(conn: sqlite3.Connection, kind: str = "forum") -> tuple[str, list[str]]:  # noqa: C901
+    refs = conn.execute("SELECT id, brand, name FROM reference WHERE COALESCE(kind, 'reference') = 'reference' ORDER BY brand, id").fetchall()
+    models: dict[str, list[str]] = {}
+    for brand, name in conn.execute("SELECT b.name, m.name FROM model m JOIN brand b ON b.id = m.brand_id ORDER BY b.name, m.name"):
+        models.setdefault(brand, []).append(name)
+    ref_alias: dict[str, list[str]] = {}
+    for alias, rid in conn.execute("SELECT alias, reference_id FROM reference_alias ORDER BY alias"):
+        if alias != rid:
+            ref_alias.setdefault(rid, []).append(alias)
+    lines, brand = [], None
+    for r in refs:
+        if r["brand"] != brand:
+            brand = r["brand"]
+            lines.append(f"{brand}:")
+        nick = f" — {', '.join(ref_alias[r['id']])}" if r["id"] in ref_alias else ""
+        lines.append(f"- {r['id']}: {r['name']}{nick}")
     aliases: dict[str, list[str]] = {}
     for alias, fid in conn.execute("SELECT alias, factory_id FROM factory_alias ORDER BY factory_id, alias"):
         aliases.setdefault(fid, []).append(alias)
+    lines.append("")
+    lines.append("Models by brand (use these names for model when no reference is given):")
+    lines += [f"{b}: {', '.join(ms)}" for b, ms in models.items()]
     text = (SYSTEM_TELEGRAM if kind == "telegram" else SYSTEM).format(
         aspects=", ".join(ASPECT_IDS),
-        references="\n".join(f"- {r['id']}: {r['name']}" for r in refs),
+        references="\n".join(lines),
         factories="\n".join(f"- {', '.join(a)}" for a in aliases.values()),
     )
     return text, [r["id"] for r in refs]
@@ -270,9 +291,22 @@ def extract_thread(conn: sqlite3.Connection, thread_id: str, source_id: str = "r
         "builds = ?, extract_cursor = ? WHERE source_id = ? AND external_id = ?",
         (summary, _now(), model_used, round(cost, 4), json.dumps(builds), new_cursor, source_id, thread_id),
     )
+    conn.execute("INSERT INTO cost_log(at, source_id, thread_id, usd) VALUES (?, ?, ?, ?)", (_now(), source_id, thread_id, round(cost, 4)))
     conn.commit()
     _rescore(conn)
     return {**result, "summary": summary, "cost_usd": round(cost, 4), "model": model_used, "chunks": len(chunks)}
+
+
+def spent_today(conn: sqlite3.Connection) -> float:
+    today = datetime.now(timezone.utc).date().isoformat()
+    return conn.execute("SELECT COALESCE(SUM(usd), 0) FROM cost_log WHERE at >= ?", (today,)).fetchone()[0]
+
+
+def daily_budget() -> float:
+    try:
+        return float(addon_options().get("claude_daily_budget") or 3.0)
+    except (TypeError, ValueError):
+        return 3.0
 
 
 def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, model: str, replace: bool = True, after_post: int = 0) -> dict:
@@ -290,8 +324,6 @@ def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, model: str, repl
 
     builds: dict[str, str] = {}
     for b in out["builds"]:
-        if b["reference"] == "OTHER":
-            continue
         if (build_id := _resolve_build(conn, b)):
             builds[b["key"]] = build_id
 
@@ -354,10 +386,14 @@ def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, model: str, repl
 
 
 def _resolve_build(conn: sqlite3.Connection, b: dict) -> str | None:
-    """Deterministic mapping via the alias tables; unknown factories are added and flagged for review."""
+    """Deterministic mapping via the alias tables; unknown factories and references are added
+    and flagged for review."""
     name = b["factory"].strip()
     if not name or conn.execute("SELECT 1 FROM factory_block WHERE alias = ?", (name,)).fetchone():
         return None  # owner marked this name "not a factory"
+    reference_id = _resolve_reference(conn, b.get("brand", ""), b.get("reference", ""), b.get("model", ""))
+    if not reference_id:
+        return None
     row = conn.execute("SELECT factory_id FROM factory_alias WHERE alias = ?", (name,)).fetchone()
     if row:
         factory_id = row[0]
@@ -366,14 +402,67 @@ def _resolve_build(conn: sqlite3.Connection, b: dict) -> str | None:
         conn.execute("INSERT OR IGNORE INTO factory(id, name, status, notes, needs_review) VALUES (?, ?, 'unknown', 'auto-added by extraction', 1)", (factory_id, name))
         conn.execute("INSERT OR IGNORE INTO factory_alias VALUES (?, ?)", (name, factory_id))
     version = b["version"].strip().upper() if re.fullmatch(r"\s*[Vv]\d+(\.\d+)?\s*", b["version"]) else "unspecified"
-    build_id = f"{factory_id}-{b['reference'].lower()}-{version.lower()}"
+    build_id = f"{factory_id}-{_slug(reference_id)}-{version.lower()}"
     conn.execute(
         "INSERT OR IGNORE INTO build(id, reference_id, factory_id, version, movement, status) VALUES (?, ?, ?, ?, ?, 'current')",
-        (build_id, b["reference"], factory_id, version, b["movement"] or None),
+        (build_id, reference_id, factory_id, version, b["movement"] or None),
     )
     if b["movement"]:
         conn.execute("UPDATE build SET movement = ? WHERE id = ? AND movement IS NULL", (b["movement"], build_id))
     return build_id
+
+
+def _resolve_reference(conn: sqlite3.Connection, brand: str, ref: str, model: str) -> str | None:
+    """Reference number or nickname -> its id; else the brand's model -> the model-level entry.
+    New reference numbers and new models are added and flagged for review; nothing is guessed."""
+    from .brands import slug
+    from .catalogue import canonical_brand, ensure_model_reference, find_model
+
+    ref, model = ref.strip(), model.strip()
+    brand = canonical_brand(conn, brand) or brand.strip()
+    for key in (ref, _norm_ref(ref)):
+        if key:
+            row = conn.execute("SELECT reference_id FROM reference_alias WHERE alias = ?", (key,)).fetchone()
+            if row:
+                return row[0]
+    if model and not ref:  # a nickname that points at a specific reference ("BB58", "Pepsi")
+        row = conn.execute("SELECT ra.reference_id FROM reference_alias ra JOIN reference r ON r.id = ra.reference_id "
+                           "WHERE ra.alias = ? AND (r.brand = ? OR ? = '')", (model, brand, brand)).fetchone()
+        if row:
+            return row[0]
+    if not brand:
+        return None
+    model_id = find_model(conn, brand, model) if model else None
+    if model and not model_id and conn.execute("SELECT 1 FROM brand WHERE name = ?", (brand,)).fetchone():
+        family = re.split(r"\s+(?=\d)|\s*[“\"(]", model)[0].strip() or model
+        model_id = find_model(conn, brand, family)
+        if not model_id:  # a model we don't know yet: add it, flagged
+            bid = slug(brand)
+            model_id = f"{bid}/{slug(family)}"
+            conn.execute("INSERT OR IGNORE INTO model(id, brand_id, name, needs_review) VALUES (?, ?, ?, 1)", (model_id, bid, family))
+            conn.execute("INSERT OR IGNORE INTO model_alias VALUES (?, ?)", (family, model_id))
+    if ref and len(_norm_ref(ref)) >= 3:  # a new reference number: add it under its model
+        ref_id = _norm_ref(ref)
+        family = conn.execute("SELECT name FROM model WHERE id = ?", (model_id,)).fetchone()[0] if model_id else (model or brand)
+        conn.execute(
+            "INSERT OR IGNORE INTO reference(id, brand, family, name, kind, model_id, needs_review, notes) "
+            "VALUES (?, ?, ?, ?, 'reference', ?, 1, 'auto-added by extraction')",
+            (ref_id, brand, family, model or ref_id, model_id),
+        )
+        conn.executemany("INSERT OR IGNORE INTO reference_alias VALUES (?, ?)", [(a, ref_id) for a in {ref, ref_id} if a])
+        return ref_id
+    if model_id:
+        name = conn.execute("SELECT name FROM model WHERE id = ?", (model_id,)).fetchone()[0]
+        return ensure_model_reference(conn, brand, name, model_id)
+    return None
+
+
+def _norm_ref(ref: str) -> str:
+    return re.sub(r"^(ref\.?|reference)\s*", "", ref.strip(), flags=re.I).upper()
+
+
+def _slug(ref_id: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", ref_id.lower())
 
 
 def _upsert_defect(conn: sqlite3.Connection, build_id: str, d: dict) -> int:
@@ -412,7 +501,10 @@ def pending(conn: sqlite3.Connection, settle_seconds: int = 90) -> list[tuple[st
     """(source_id, thread_id) with new material since their last extraction, idle long enough
     that a capture run (or a channel poll) has finished."""
     rows = conn.execute(
-        "SELECT source_id, external_id, last_captured, extracted_at FROM thread WHERE extracted_at IS NULL OR extracted_at < last_captured"
+        """SELECT source_id, external_id, last_captured, extracted_at FROM thread
+           WHERE extracted_at IS NULL OR extracted_at < last_captured
+           ORDER BY CASE WHEN source_id IN ('rwi') OR source_id LIKE 'reddit:%' THEN 0 WHEN source_id LIKE 'tg:%' THEN 1 ELSE 2 END,
+                    last_captured DESC"""
     ).fetchall()
     now = datetime.now(timezone.utc)
     channel_hours = float(addon_options().get("telegram_analyse_hours") or 6)
@@ -420,6 +512,11 @@ def pending(conn: sqlite3.Connection, settle_seconds: int = 90) -> list[tuple[st
     for source_id, thread_id, captured, extracted in rows:
         if (now - _dt(captured)).total_seconds() < settle_seconds:
             continue
+        if source_id == "rwg":
+            from .rwg import topic_complete
+
+            if not topic_complete(conn, thread_id):  # wait for every page, so a topic is paid for once
+                continue
         # Channels are analysed in batches, not after every poll, to keep cost predictable.
         if source_id.startswith("tg:") and extracted and (now - _dt(extracted)).total_seconds() < channel_hours * 3600:
             continue

@@ -1,7 +1,7 @@
 import { Check, GitMerge, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { postJson, useApi, type AdminFactory } from "../api";
+import { postJson, useApi, type AdminFactory, type AdminReference } from "../api";
 import { ErrorNote, PageLoading, SectionHead, StatusPill } from "../components/ui";
 import { cx } from "../lib/format";
 
@@ -10,6 +10,7 @@ type Data = { factories: AdminFactory[]; blocked: string[]; statuses: string[] }
 export default function FactoryReview() {
   const [nonce, setNonce] = useState(0);
   const { data, error } = useApi<Data>(`admin/factories?n=${nonce}`);
+  const { data: refs } = useApi<{ references: AdminReference[]; models: { id: string; brand: string; name: string; builds: number }[] }>(`admin/references?n=${nonce}`);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   if (error) return <ErrorNote error={error} />;
   if (!data) return <PageLoading />;
@@ -32,9 +33,9 @@ export default function FactoryReview() {
         <Link to="/factories" className="eyebrow hover:text-paper">
           Factories
         </Link>
-        <h1 className="mt-4 font-display text-[52px] leading-none tracking-tight md:text-[64px]">Factory review</h1>
+        <h1 className="mt-4 font-display text-[52px] leading-none tracking-tight md:text-[64px]">Review</h1>
         <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
-          New factory names found by the analysis land here. Confirm them, merge spelling variants into the right factory, or mark dealer names as “not a factory” so
+          New factories, models and reference numbers found by the analysis land here. Confirm them, merge spelling variants into the right factory, or mark dealer names as “not a factory” so
           they’re skipped from now on. Aliases teach future analyses which name means which factory.
         </p>
       </header>
@@ -57,6 +58,29 @@ export default function FactoryReview() {
           ))}
         </div>
       </section>
+
+      {refs && (refs.models.length > 0 || refs.references.some((r) => r.needs_review)) && (
+        <section className="mt-16">
+          <SectionHead eyebrow="From the analysis" title="New models & references" />
+          <div className="space-y-2">
+            {refs.models.map((m) => (
+              <div key={m.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-warn/40 bg-panel px-4 py-3">
+                <span className="eyebrow">Model</span>
+                <span className="text-[15px]">
+                  {m.brand} {m.name}
+                </span>
+                <span className="text-xs text-muted">{m.builds} versions</span>
+                <button onClick={() => act(() => postJson(`admin/models/${m.id}/confirm`), `${m.brand} ${m.name} confirmed.`)} className="ml-auto inline-flex items-center gap-1 rounded-full border border-line-strong px-3 py-1 text-xs hover:bg-white/5">
+                  <Check size={12} /> Confirm
+                </button>
+              </div>
+            ))}
+            {refs.references.filter((r) => r.needs_review).map((r) => (
+              <RefRow key={r.id} r={r} all={refs.references} act={act} />
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="mt-16">
         <SectionHead eyebrow={`${rest.length} factories`} title="All factories" />
@@ -170,7 +194,7 @@ function FactoryCard({
             </div>
             {f.build_list.length > 0 && (
               <div>
-                <div className="eyebrow mb-2">Builds</div>
+                <div className="eyebrow mb-2">Versions</div>
                 <div className="flex flex-wrap gap-1.5">
                   {f.build_list.map((b) => (
                     <Link key={b.id} to={`/build/${b.id}`} className="rounded-full border border-line px-2.5 py-0.5 font-mono text-[11px] text-muted hover:text-paper">
@@ -208,7 +232,7 @@ function FactoryCard({
                   disabled={!into}
                   onClick={() => {
                     const target = all.find((o) => o.id === into)!;
-                    if (confirm(`Merge ${f.name} into ${target.name}? Its ${f.builds} build(s) and ${f.claims} finding(s) move over and “${f.name}” becomes an alias.`))
+                    if (confirm(`Merge ${f.name} into ${target.name}? Its ${f.builds} version(s) and ${f.claims} finding(s) move over and “${f.name}” becomes an alias.`))
                       act(() => postJson(`${base}/merge`, { into }), `${f.name} merged into ${target.name}.`);
                   }}
                   className="inline-flex items-center gap-1.5 rounded-full border border-line-strong px-3 py-1.5 text-sm disabled:opacity-40"
@@ -219,7 +243,7 @@ function FactoryCard({
             </div>
             <button
               onClick={() => {
-                if (confirm(`“${f.name}” is not a factory? Its ${f.builds} build(s) and ${f.claims} finding(s) are removed and the name is skipped in future analyses.`))
+                if (confirm(`“${f.name}” is not a factory? Its ${f.builds} version(s) and ${f.claims} finding(s) are removed and the name is skipped in future analyses.`))
                   act(() => postJson(base, undefined, "DELETE"), `${f.name} removed and blocked.`);
               }}
               className="inline-flex items-center gap-1.5 text-sm text-bad/80 hover:text-bad"
@@ -238,6 +262,42 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div>
       <div className="eyebrow mb-2">{label}</div>
       <div className="flex items-center gap-2">{children}</div>
+    </div>
+  );
+}
+
+function RefRow({ r, all, act }: { r: AdminReference; all: AdminReference[]; act: (fn: () => Promise<unknown>, ok: string) => void }) {
+  const [into, setInto] = useState("");
+  const base = `admin/references/${r.id}`;
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-warn/40 bg-panel px-4 py-3">
+      <span className="eyebrow">Reference</span>
+      <span className="font-mono text-[13px]">{r.id}</span>
+      <span className="text-[14px] text-muted">
+        {r.brand} · {r.name}
+      </span>
+      <span className="text-xs text-faint">{r.builds} versions</span>
+      <span className="ml-auto flex flex-wrap items-center gap-2">
+        <button onClick={() => act(() => postJson(base, { reviewed: true }), `${r.id} confirmed.`)} className="inline-flex items-center gap-1 rounded-full border border-line-strong px-3 py-1 text-xs hover:bg-white/5">
+          <Check size={12} /> Confirm
+        </button>
+        <select value={into} onChange={(e) => setInto(e.target.value)} className="max-w-48 rounded-lg border border-line bg-ink px-2 py-1 text-xs outline-none">
+          <option value="">same as…</option>
+          {all
+            .filter((o) => o.id !== r.id && o.brand === r.brand)
+            .map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.id} · {o.name}
+              </option>
+            ))}
+        </select>
+        <button disabled={!into} onClick={() => act(() => postJson(`${base}/merge`, { into }), `${r.id} merged into ${into}.`)} className="inline-flex items-center gap-1 rounded-full border border-line-strong px-3 py-1 text-xs disabled:opacity-40">
+          <GitMerge size={12} /> Merge
+        </button>
+        <button onClick={() => confirm(`Discard ${r.id}? Its ${r.builds} version(s) and findings are removed.`) && act(() => postJson(`${base}/discard`), `${r.id} discarded.`)} className="text-xs text-bad/80 hover:text-bad">
+          <Trash2 size={12} className="inline" /> Discard
+        </button>
+      </span>
     </div>
   );
 }

@@ -32,8 +32,8 @@ export default function Factory() {
         </div>
         <div className="grid grid-cols-3 gap-6 self-end border-t border-line pt-6">
           <Stat label="Avg current" value={fmtScore(avg)} />
-          <Stat label="Current builds" value={current.length} sub={`${f.builds.length} all time`} />
-          <Stat label="Open defects" value={openDefects} sub="on current builds" />
+          <Stat label="Current versions" value={current.length} sub={`${f.builds.length} all time`} />
+          <Stat label="Open defects" value={openDefects} sub="on current versions" />
         </div>
       </header>
 
@@ -53,7 +53,7 @@ export default function Factory() {
       )}
 
       <section className="mt-16">
-        <SectionHead eyebrow={`${current.length} builds`} title="In production" />
+        <SectionHead eyebrow={`${current.length} versions`} title="In production" />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {current.map((b, i) => (
             <BuildCard key={b.id} b={b} index={i} />
@@ -63,7 +63,7 @@ export default function Factory() {
 
       {past.length > 0 && (
         <section className="mt-16">
-          <SectionHead eyebrow={`${past.length} builds`} title="Superseded & discontinued" />
+          <SectionHead eyebrow={`${past.length} versions`} title="Superseded & discontinued" />
           <div className="grid grid-cols-2 gap-4 opacity-80 sm:grid-cols-3 lg:grid-cols-5">
             {past.map((b, i) => (
               <BuildCard key={b.id} b={b} index={i} />

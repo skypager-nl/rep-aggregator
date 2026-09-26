@@ -22,7 +22,7 @@ export default function Home() {
       <section className="grid items-center gap-10 pb-16 pt-12 md:grid-cols-[1.1fr_1fr] md:pt-20">
         <div>
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7 }} className="eyebrow mb-6">
-            Rolex edition · scores as of {fmtDate(meta.as_of, "long")}
+            Scores as of {fmtDate(meta.as_of, "long")}
           </motion.div>
           <motion.h1
             initial={{ opacity: 0, y: 18 }}
@@ -39,7 +39,7 @@ export default function Home() {
             handful of hype posts can’t buy a place at the top.
           </motion.p>
           <div className="mt-10 grid max-w-lg grid-cols-3 gap-6 border-t border-line pt-6">
-            <Stat label="Builds" value={fmtInt(meta.counts.build)} sub={`${meta.counts.reference} references`} />
+            <Stat label="Versions" value={fmtInt(meta.counts.build)} sub={`${meta.counts.reference} references`} />
             <Stat label="Claims" value={fmtInt(meta.counts.claim)} sub={`${fmtInt(meta.counts.post)} posts`} />
             <Stat label="Defects" value={fmtInt(meta.counts.defect)} sub="tracked by version" />
           </div>
@@ -48,7 +48,7 @@ export default function Home() {
               Tier list <ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5" />
             </Link>
             <Link to="/explore" className="inline-flex items-center gap-2 rounded-full border border-line-strong px-5 py-2.5 text-sm text-paper transition-colors hover:bg-white/5">
-              Explore builds
+              Explore versions
             </Link>
           </div>
         </div>
@@ -70,7 +70,7 @@ export default function Home() {
                 <div className="leading-tight">
                   {hero.factory} {hero.version} <span className="font-mono text-xs text-muted">{hero.reference_id}</span>
                 </div>
-                <div className="text-xs text-muted">Highest-rated current build · {fmtScore(hero.score)}</div>
+                <div className="text-xs text-muted">Highest-rated current version · {fmtScore(hero.score)}</div>
               </div>
             </div>
           </Link>
@@ -80,11 +80,11 @@ export default function Home() {
       {/* top builds */}
       <section className="pt-8">
         <SectionHead
-          eyebrow="Current builds"
+          eyebrow="Current versions"
           title="Reference grade"
           action={
             <Link to="/explore?sort=lower" className="text-sm text-muted transition-colors hover:text-paper">
-              All builds →
+              All versions →
             </Link>
           }
         />
@@ -123,7 +123,7 @@ export default function Home() {
         <div className="space-y-14">
           {/* defect watch */}
           <div>
-            <SectionHead eyebrow="Current builds · last 120 days" title="Defect watch" />
+            <SectionHead eyebrow="Current versions · last 120 days" title="Defect watch" />
             <ul>
               {feed.defects.slice(0, 7).map((d) => (
                 <li key={d.id} className="border-b border-line last:border-0">

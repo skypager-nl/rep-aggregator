@@ -7,6 +7,7 @@ if [ ! -f /data/repagg.db ] && python -c "import json,sys; sys.exit(0 if json.lo
   repagg demo
 fi
 
+repagg seed-catalogue
 repagg import-photos /app/genuine
 
 # Report whether the RWI proxy route is safe (contacts an IP-echo service only, never RWI).

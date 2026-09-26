@@ -38,7 +38,6 @@ export default function Layout() {
         <div className="mx-auto flex h-16 max-w-[1360px] items-center justify-between px-4 md:px-10">
           <Link to="/" className="flex items-baseline gap-2.5">
             <span className="font-display text-[26px] leading-none tracking-tight">The Rep Index</span>
-            <span className="hidden font-mono text-[10px] uppercase tracking-[0.2em] text-gold sm:inline">Rolex</span>
           </Link>
           <nav className="hidden items-center gap-1 md:flex">
             {NAV.map((n) => (
@@ -55,7 +54,7 @@ export default function Layout() {
                     <span className="relative">
                       {n.label}
                       {n.to === "/compare" && compared.length > 0 && <span className="ml-1.5 font-mono text-[10.5px] text-gold">{compared.length}</span>}
-                      {n.to === "/factories" && (meta?.factories_to_review ?? 0) > 0 && <span className="ml-1.5 inline-block h-1.5 w-1.5 -translate-y-1.5 rounded-full bg-warn" title="Factories to review" />}
+                      {n.to === "/factories" && (meta?.factories_to_review ?? 0) + (meta?.references_to_review ?? 0) > 0 && <span className="ml-1.5 inline-block h-1.5 w-1.5 -translate-y-1.5 rounded-full bg-warn" title="Factories to review" />}
                     </span>
                   </>
                 )}

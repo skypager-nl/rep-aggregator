@@ -1,5 +1,5 @@
 name: Rep Index
-version: "0.4.0"
+version: "0.6.0"
 slug: rep_aggregator
 description: Replica watch aggregator — builds, factories, defects and tiers
 arch:
@@ -31,12 +31,15 @@ options:
   telegram_api_hash: ""
   telegram_analyse_hours: 6
   demo_data: false
+  claude_daily_budget: 3
   collectors:
+    rwg: false
     reddit: false
     rwi: false
     telegram: false
   max_disk_gb: 15
-  # RWI crawler only. Fails closed: no proxy -> no crawl. e.g. host "amsterdam.nl.socks.nordhold.net:1080"
+  # VPN route for all forum collectors (RWG; RWI only with explicit approval). Fails closed:
+  # no proxy / dead proxy / home-IP exit -> no requests. e.g. host "amsterdam.nl.socks.nordhold.net:1080"
   rwi_proxy:
     host: ""
     username: ""
@@ -49,7 +52,9 @@ schema:
   telegram_api_hash: password?
   telegram_analyse_hours: int(1,48)
   demo_data: bool
+  claude_daily_budget: float(0.5,100)
   collectors:
+    rwg: bool
     reddit: bool
     rwi: bool
     telegram: bool

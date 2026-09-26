@@ -6,12 +6,13 @@ import { Chip, ErrorNote, PageLoading } from "../components/ui";
 import { cx, scoreColor } from "../lib/format";
 
 const DIM_LABEL: Record<string, string> = {
+  brand: "Brand",
   factory: "Factory",
   reference: "Reference",
   family: "Family",
   aspect: "Aspect",
   version: "Version",
-  status: "Build status",
+  status: "Version status",
   source: "Source",
   source_kind: "Source type",
   evidence: "Evidence",
@@ -28,7 +29,8 @@ const MEASURES: Record<string, { label: string; fmt: (v: number) => string; colo
 const PRESETS = [
   { label: "Factory × aspect", rows: "factory", cols: "aspect", measure: "score" },
   { label: "Factory reputation by quarter", rows: "factory", cols: "quarter", measure: "score" },
-  { label: "Defect rate by family", rows: "family", cols: "factory", measure: "defect_rate" },
+  { label: "Brand × aspect", rows: "brand", cols: "aspect", measure: "score" },
+  { label: "Defect rate by model", rows: "family", cols: "factory", measure: "defect_rate" },
   { label: "Where the talk happens", rows: "source", cols: "family", measure: "claims" },
   { label: "Version progress", rows: "reference", cols: "version", measure: "score" },
 ];
@@ -39,16 +41,18 @@ export default function Pivot() {
   const rows = params.get("rows") ?? "factory";
   const cols = params.get("cols") ?? "aspect";
   const measure = params.get("measure") ?? "score";
+  const brand = params.getAll("brand");
   const family = params.getAll("family");
   const status = params.get("status") ?? "current";
 
   const query = useMemo(() => {
     const q = new URLSearchParams({ rows, measure });
     if (cols !== "none") q.set("cols", cols);
+    brand.forEach((b) => q.append("brand", b));
     family.forEach((f) => q.append("family", f));
     if (status !== "all") q.append("status", status);
     return `pivot?${q}`;
-  }, [rows, cols, measure, family, status]);
+  }, [rows, cols, measure, brand, family, status]);
   const { data, error } = useApi<PivotData>(query);
 
   const update = (patch: Record<string, string | string[] | null>) => {
@@ -108,13 +112,19 @@ export default function Pivot() {
         </button>
         <Select label="Columns" value={cols} onChange={(v) => update({ cols: v })} options={["none", ...Object.keys(DIM_LABEL).filter((d) => d !== rows)]} />
         <Select label="Measure" value={measure} onChange={(v) => update({ measure: v })} options={Object.keys(MEASURES)} labels={Object.fromEntries(Object.entries(MEASURES).map(([k, m]) => [k, m.label]))} />
-        <Select label="Builds" value={status} onChange={(v) => update({ status: v === "current" ? null : v })} options={["current", "superseded", "discontinued", "all"]} />
+        <Select label="Versions" value={status} onChange={(v) => update({ status: v === "current" ? null : v })} options={["current", "superseded", "discontinued", "all"]} />
         <div className="flex-1" />
         <button onClick={exportCsv} className="inline-flex items-center gap-2 rounded-full border border-line px-4 py-2 text-sm text-muted hover:text-paper">
           <Download size={14} /> CSV
         </button>
       </div>
       <div className="mb-8 flex flex-wrap gap-1.5">
+        {meta.brands.filter((b) => b.builds > 0).map((b) => (
+          <Chip key={b.brand} active={brand.includes(b.brand)} onClick={() => update({ brand: brand.includes(b.brand) ? brand.filter((x) => x !== b.brand) : [...brand, b.brand] })}>
+            {b.brand}
+          </Chip>
+        ))}
+        <span className="mx-1 h-6 w-px bg-line" />
         {meta.families.map((f) => (
           <Chip key={f} active={family.includes(f)} onClick={() => update({ family: family.includes(f) ? family.filter((x) => x !== f) : [...family, f] })}>
             {f}

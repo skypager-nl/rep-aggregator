@@ -73,7 +73,7 @@ export default function Compare() {
         <div className="mb-8 rounded-2xl border border-line bg-panel p-4">
           <label className="flex items-center gap-2 rounded-full border border-line bg-ink px-4 py-2">
             <Search size={15} className="text-muted" />
-            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a build…" className="w-full bg-transparent text-sm outline-none" />
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a version…" className="w-full bg-transparent text-sm outline-none" />
             <button onClick={() => setPicking(false)} className="text-muted">
               <X size={15} />
             </button>
@@ -96,9 +96,9 @@ export default function Compare() {
       {!ids.length ? (
         <div className="rounded-3xl border border-dashed border-line-strong py-24 text-center">
           <p className="font-display text-3xl">Nothing to compare yet</p>
-          <p className="mt-3 text-sm text-muted">Add builds from their pages, or pick some here.</p>
+          <p className="mt-3 text-sm text-muted">Add versions from their pages, or pick some here.</p>
           <button onClick={() => setPicking(true)} className="mt-6 inline-flex items-center gap-2 rounded-full bg-paper px-5 py-2.5 text-sm text-ink">
-            <Plus size={15} /> Add a build
+            <Plus size={15} /> Add a version
           </button>
         </div>
       ) : (

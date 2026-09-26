@@ -20,8 +20,10 @@ export default function Factories() {
           to="/factories/review"
           className="mt-6 inline-flex items-center gap-2 rounded-full border border-line-strong px-4 py-1.5 text-sm transition-colors hover:bg-white/5"
         >
-          Review factories
-          {meta && meta.factories_to_review > 0 && <span className="rounded-full bg-warn/20 px-2 font-mono text-[11px] text-warn">{meta.factories_to_review} new</span>}
+          Review factories & references
+          {meta && meta.factories_to_review + meta.references_to_review > 0 && (
+            <span className="rounded-full bg-warn/20 px-2 font-mono text-[11px] text-warn">{meta.factories_to_review + meta.references_to_review} new</span>
+          )}
         </Link>
         <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
           Ranked by the average score of their current builds. Aliases are resolved deterministically, so “CF”, “Clean” and “C Factory” all count once.
@@ -52,7 +54,7 @@ export default function Factories() {
                 <TierStack counts={f.tier_counts} />
                 <div className="mt-3 flex justify-between text-xs text-muted">
                   <span>
-                    {f.builds.filter((b) => b.status === "current").length} current · {f.builds.length} total builds
+                    {f.builds.filter((b) => b.status === "current").length} current · {f.builds.length} total versions
                   </span>
                   <span>{f.references.length} references</span>
                 </div>

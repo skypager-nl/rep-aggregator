@@ -234,3 +234,35 @@ CREATE TABLE IF NOT EXISTS capture (
 CREATE TABLE IF NOT EXISTS factory_block (
     alias TEXT PRIMARY KEY COLLATE NOCASE
 );
+
+-- Brand & model scaffolding (genuine side) -------------------------------------
+
+CREATE TABLE IF NOT EXISTS brand (
+    id   TEXT PRIMARY KEY,                 -- 'audemars-piguet'
+    name TEXT NOT NULL UNIQUE              -- 'Audemars Piguet'
+);
+CREATE TABLE IF NOT EXISTS brand_alias (
+    alias    TEXT PRIMARY KEY COLLATE NOCASE,
+    brand_id TEXT NOT NULL REFERENCES brand(id)
+);
+CREATE TABLE IF NOT EXISTS model (
+    id           TEXT PRIMARY KEY,         -- 'audemars-piguet/royal-oak'
+    brand_id     TEXT NOT NULL REFERENCES brand(id),
+    name         TEXT NOT NULL,            -- 'Royal Oak'
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (brand_id, name)
+);
+CREATE TABLE IF NOT EXISTS model_alias (
+    alias    TEXT NOT NULL COLLATE NOCASE,
+    model_id TEXT NOT NULL REFERENCES model(id),
+    PRIMARY KEY (alias, model_id)
+);
+
+-- Claude spend per analysis, for the daily budget ---------------------------------
+CREATE TABLE IF NOT EXISTS cost_log (
+    id        INTEGER PRIMARY KEY,
+    at        TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    usd       REAL NOT NULL
+);

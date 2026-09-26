@@ -15,11 +15,14 @@ export type Meta = {
   families: string[];
   factories: { id: string; name: string; status: string }[];
   factories_to_review: number;
+  references_to_review: number;
+  brands: { brand: string; references_: number; builds: number }[];
   sources: { id: string; kind: string; name: string; trust: number }[];
 };
 
 export type Reference = {
   id: string;
+  kind?: "reference" | "model";
   brand: string;
   family: string;
   name: string;
@@ -57,6 +60,7 @@ export type BuildSummary = {
   status: BuildStatus;
   factory: string;
   factory_status: string;
+  brand: string;
   family: string;
   reference_name: string;
   dial_color: string;
@@ -270,7 +274,12 @@ export type CapturedThread = {
   extract_model: string | null;
   builds: string | null;
 };
-export type Extraction = { configured: boolean; model: string; effort: string; busy: string | null };
+export type Extraction = { configured: boolean; model: string; effort: string; busy: string | null; spent_today: number; daily_budget: number; queued: number; budget_reached: boolean };
+export type RwgStatus = {
+  enabled: boolean; paused: boolean; pause_reason: string | null; last_error: string | null; last_run: string | null; exit: string | null;
+  requests_today: number; daily_cap: number; topics_known: number; topics_complete: number; topics_started: number;
+  forums: number; forums_backfilled: number; listing_pages: number;
+};
 export type Source = { url: string; title: string; forum: string | null; summary: string | null; source: string; findings: number; first_post: string; last_post: string };
 export type CaptureLog = { id: number; thread_id: string; page: number; captured_at: string; posts: number; new_posts: number; photos: number; status: string };
 
@@ -292,3 +301,5 @@ export type TgChannel = {
   extract_error: string | null;
 };
 export type TgStatus = { configured: boolean; authorized: boolean; account: string | null; step: string | null; polling: boolean; error?: string; channels: TgChannel[] };
+
+export type AdminReference = { id: string; brand: string; family: string; name: string; needs_review: number; builds: number; claims: number; aliases: string[] };

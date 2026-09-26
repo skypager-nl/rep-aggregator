@@ -11,7 +11,7 @@ export default function Reference() {
   const { id } = useParams();
   const nav = useNavigate();
   const { data: meta } = useApi<Meta>("meta");
-  const { data: ref, error } = useApi<ReferenceDetail>(`references/${id}`);
+  const { data: ref, error } = useApi<ReferenceDetail>(`references/${encodeURIComponent(id ?? "")}`);
   const [currentOnly, setCurrentOnly] = useState(false);
   if (error) return <ErrorNote error={error} />;
   if (!ref || !meta) return <PageLoading />;
@@ -36,7 +36,7 @@ export default function Reference() {
             {ref.brand} · {ref.family}
           </Link>
           <h1 className="mt-4 font-display text-[48px] leading-[0.95] tracking-tight md:text-[72px]">{ref.name}</h1>
-          <div className="mt-3 font-mono text-lg text-gold">{ref.id}</div>
+          <div className="mt-3 font-mono text-lg text-gold">{ref.kind === "model" ? "Any reference" : ref.id}</div>
           <dl className="mt-8 grid grid-cols-2 gap-x-8 gap-y-5 border-t border-line pt-6 sm:grid-cols-4">
             {specs.map(([k, v]) => (
               <div key={k}>
@@ -62,14 +62,14 @@ export default function Reference() {
             }}
             className="mt-8 inline-flex items-center gap-2 rounded-full border border-line-strong px-4 py-2 text-sm transition-colors hover:bg-white/5"
           >
-            <Columns3 size={15} /> Compare top current builds
+            <Columns3 size={15} /> Compare top current versions
           </button>
         </div>
       </section>
 
       <section>
         <SectionHead
-          eyebrow={`${ref.builds.length} builds tracked`}
+          eyebrow={`${ref.builds.length} versions tracked`}
           title="The ranking"
           action={
             <Chip active={currentOnly} onClick={() => setCurrentOnly((v) => !v)}>
@@ -82,7 +82,7 @@ export default function Reference() {
             <thead>
               <tr className="eyebrow border-b border-line">
                 <th className="w-12 py-3 font-normal">#</th>
-                <th className="py-3 font-normal">Build</th>
+                <th className="py-3 font-normal">Version</th>
                 <th className="py-3 font-normal">Tier</th>
                 <th className="w-[26%] py-3 font-normal">Score · lower bound</th>
                 <th className="py-3 text-right font-normal">GL rate</th>
@@ -133,7 +133,7 @@ export default function Reference() {
       </section>
 
       <section className="mt-20">
-        <SectionHead eyebrow="Per-aspect score, 0–10" title="Where each build wins and loses" />
+        <SectionHead eyebrow="Per-aspect score, 0–10" title="Where each version wins and loses" />
         <div className="-mx-4 overflow-x-auto px-4">
           <table className="w-full min-w-[860px] border-separate border-spacing-1 text-center">
             <thead>

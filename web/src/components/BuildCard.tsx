@@ -33,7 +33,7 @@ export default function BuildCard({ b, index = 0, showRef = true }: { b: BuildSu
               </div>
               {showRef && (
                 <div className="mt-0.5 truncate text-[12.5px] text-muted">
-                  <span className="font-mono text-[11.5px] text-paper/80">{b.reference_id}</span> · {b.reference_name}
+                  {b.brand} · <span className="font-mono text-[11.5px] text-paper/80">{b.reference_id}</span> · {b.reference_name}
                 </div>
               )}
             </div>

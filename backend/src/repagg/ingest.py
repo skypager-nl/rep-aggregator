@@ -6,6 +6,7 @@ Idempotent: re-sending a page updates it in place, never duplicates.
 import gzip
 import json
 import math
+import re
 import sqlite3
 from datetime import date, datetime, timezone
 
@@ -25,25 +26,46 @@ def reputation(p: Post, today: date | None = None) -> float:
         rep += 0.3
     if "certified" in banners:
         rep += 0.1
+    if re.search(r"mentor|moderator|admin|vip|supporter", banners):
+        rep += 0.2
+    if p.author_reactions and p.author_messages and p.author_joined is None:  # forums without a join date (RWG): reputation points
+        rep += min(0.3, 0.1 * math.log10(1 + max(p.author_reactions, 0)))
+    if "dealer" in banners:  # sellers reviewing what they sell
+        rep = min(rep, 0.6)
     return round(max(0.3, min(2.0, rep)), 2)
 
 
-def ingest_rwi_page(conn: sqlite3.Connection, html: str, url: str, captured_at: str | None = None) -> dict:
-    now = captured_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    page = parse_thread(html, url)
-    conn.execute("INSERT OR IGNORE INTO source(id, kind, name, url, trust) VALUES (?, ?, ?, ?, ?)", RWI)
+RWG = ("rwg", "forum", "RWG", "https://www.rwg.bz/board/", 1.2)
 
-    raw = RAW_DIR / "rwi" / page.thread_id / f"p{page.page}.html.gz"
+
+def ingest_rwi_page(conn: sqlite3.Connection, html: str, url: str, captured_at: str | None = None) -> dict:
+    return ingest_forum_page(conn, RWI, parse_thread(html, url), html, url, captured_at)
+
+
+def ingest_rwg_page(conn: sqlite3.Connection, html: str, url: str, captured_at: str | None = None) -> dict:
+    from .rwg_parse import parse_topic
+
+    return ingest_forum_page(conn, RWG, parse_topic(html, url), html, url, captured_at)
+
+
+def ingest_forum_page(conn: sqlite3.Connection, source: tuple, page: ThreadPage, html: str, url: str, captured_at: str | None = None) -> dict:
+    """One page of a forum thread (any forum): raw archive, thread, authors, posts, photo URLs."""
+    now = captured_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    sid = source[0]
+    conn.execute("INSERT OR IGNORE INTO source(id, kind, name, url, trust) VALUES (?, ?, ?, ?, ?)", source)
+
+    raw = RAW_DIR / sid / page.thread_id / f"p{page.page}.html.gz"
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_bytes(gzip.compress(html.encode("utf-8"), 6))
 
-    _upsert_thread(conn, page, now)
+    _upsert_thread(conn, page, now, sid)
     new_posts = photos = 0
     for p in page.posts:
-        author_id = _upsert_author(conn, p)
-        existed = conn.execute("SELECT id FROM post WHERE source_id = 'rwi' AND external_id = ?", (p.post_id,)).fetchone()
+        author_id = _upsert_author(conn, p, sid)
+        existed = conn.execute("SELECT id FROM post WHERE source_id = ? AND external_id = ?", (sid, p.post_id)).fetchone()
+        post_url = f"{page.url}post-{p.post_id}" if sid == "rwi" else f"{page.url}&do=findComment&comment={p.post_id}"
         values = dict(
-            author_id=author_id, url=f"{page.url}post-{p.post_id}", thread_title=page.title, posted_at=p.posted_at,
+            author_id=author_id, url=post_url, thread_title=page.title, posted_at=p.posted_at,
             body=p.text, raw_path=str(raw.relative_to(RAW_DIR)), fetched_at=now, thread_id=page.thread_id, page=page.page,
             number=p.number, reactions=p.reactions, is_starter=int(p.is_starter),
             quotes=json.dumps([q.__dict__ for q in p.quotes]) if p.quotes else None,
@@ -53,7 +75,7 @@ def ingest_rwi_page(conn: sqlite3.Connection, html: str, url: str, captured_at: 
             conn.execute(f"UPDATE post SET {', '.join(f'{k} = ?' for k in values)} WHERE id = ?", (*values.values(), post_id))
         else:
             cols = ["source_id", "external_id", *values]
-            cur = conn.execute(f"INSERT INTO post({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", ("rwi", p.post_id, *values.values()))
+            cur = conn.execute(f"INSERT INTO post({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", (sid, p.post_id, *values.values()))
             post_id = cur.lastrowid
             new_posts += 1
         for img in p.images:
@@ -64,8 +86,8 @@ def ingest_rwi_page(conn: sqlite3.Connection, html: str, url: str, captured_at: 
         conn.execute(f"DELETE FROM photo WHERE post_id = ? AND url NOT IN ({keep})", (post_id, *p.images))
 
     conn.execute(
-        "INSERT INTO capture(source_id, thread_id, page, url, captured_at, posts, new_posts, photos, raw_path) VALUES ('rwi', ?, ?, ?, ?, ?, ?, ?, ?)",
-        (page.thread_id, page.page, url, now, len(page.posts), new_posts, photos, str(raw.relative_to(RAW_DIR))),
+        "INSERT INTO capture(source_id, thread_id, page, url, captured_at, posts, new_posts, photos, raw_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (sid, page.thread_id, page.page, url, now, len(page.posts), new_posts, photos, str(raw.relative_to(RAW_DIR))),
     )
     conn.commit()
     wanted = [img for p in page.posts for img in p.images]
@@ -107,31 +129,31 @@ def store_photo(conn: sqlite3.Connection, url: str, data: bytes, content_type: s
     return {"stored": rel, "rows": n, "bytes": len(data)}
 
 
-def _upsert_thread(conn: sqlite3.Connection, page: ThreadPage, now: str) -> None:
+def _upsert_thread(conn: sqlite3.Connection, page: ThreadPage, now: str, sid: str = "rwi") -> None:
     conn.execute(
         """
         INSERT INTO thread(source_id, external_id, url, title, forum, pages, first_seen, last_captured)
-        VALUES ('rwi', ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, external_id) DO UPDATE SET
             url = excluded.url, title = excluded.title, forum = excluded.forum,
             pages = MAX(thread.pages, excluded.pages), last_captured = excluded.last_captured
         """,
-        (page.thread_id, page.url, page.title, page.forum, page.pages, now, now),
+        (sid, page.thread_id, page.url, page.title, page.forum, page.pages, now, now),
     )
 
 
-def _upsert_author(conn: sqlite3.Connection, p: Post) -> int:
+def _upsert_author(conn: sqlite3.Connection, p: Post, sid: str = "rwi") -> int:
     conn.execute(
         """
         INSERT INTO author(source_id, handle, external_id, joined, post_count, reactions, banners, reputation)
-        VALUES ('rwi', ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, handle) DO UPDATE SET
             external_id = excluded.external_id, joined = excluded.joined, post_count = excluded.post_count,
             reactions = excluded.reactions, banners = excluded.banners, reputation = excluded.reputation
         """,
-        (p.author, p.author_id, p.author_joined, p.author_messages, p.author_reactions, json.dumps(p.author_banners), reputation(p)),
+        (sid, p.author, p.author_id, p.author_joined, p.author_messages, p.author_reactions, json.dumps(p.author_banners), reputation(p)),
     )
-    return conn.execute("SELECT id FROM author WHERE source_id = 'rwi' AND handle = ?", (p.author,)).fetchone()[0]
+    return conn.execute("SELECT id FROM author WHERE source_id = ? AND handle = ?", (sid, p.author)).fetchone()[0]
 
 
 REDDIT_TRUST = {"RepTimeQC": 0.9, "repbuilds": 0.8}

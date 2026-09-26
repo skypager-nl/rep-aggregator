@@ -24,6 +24,7 @@ MIGRATIONS = {
     "event": {"post_id": "INTEGER"},
     "price_point": {"thread_id": "TEXT"},
     "factory": {"needs_review": "INTEGER"},
+    "reference": {"needs_review": "INTEGER", "notes": "TEXT", "kind": "TEXT", "model_id": "TEXT"},
 }
 
 
