@@ -5,15 +5,12 @@ import { Link, useParams } from "react-router";
 import { useApi, type BuildDetail, type Meta } from "../api";
 import { TimeChart } from "../components/Charts";
 import {
-  Chip,
   Delta,
   ErrorNote,
-  EvidenceTag,
   PageLoading,
   ScoreBar,
   SectionHead,
   Severity,
-  SourceTag,
   StatusPill,
   TierBadge,
   TierMove,
@@ -32,15 +29,12 @@ export default function Build() {
   const [photoKey, setPhotoKey] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState(false);
   const [aspect, setAspect] = useState<string | null>(null);
-  const [kind, setKind] = useState<string | null>(null);
 
   useEffect(() => {
     setPhotoKey(null);
     setAspect(null);
-    setKind(null);
   }, [id]);
 
-  const quotes = useMemo(() => (b?.quotes ?? []).filter((q) => (!aspect || q.aspect === aspect) && (!kind || q.kind === kind)), [b, aspect, kind]);
   const priceSeries = useMemo(() => {
     const byDealer = new Map<string, { x: string; y: number }[]>();
     for (const p of b?.prices ?? []) byDealer.set(p.dealer, [...(byDealer.get(p.dealer) ?? []), { x: p.observed_at, y: p.price }]);
@@ -204,7 +198,7 @@ export default function Build() {
             );
           })}
         </div>
-        <p className="mt-3 px-3 text-[11.5px] text-faint">Bar = score · tick = lower bound · dot = 90 days ago. Click an aspect to filter voices and jump the gallery.</p>
+        <p className="mt-3 px-3 text-[11.5px] text-faint">Bar = score · tick = lower bound · dot = 90 days ago. Click an aspect to jump to a matching photo.</p>
       </section>
 
       {/* defects + QC */}
@@ -300,47 +294,25 @@ export default function Build() {
         </section>
       )}
 
-      {/* voices */}
+      {/* sources: links only — no posts, usernames or quotes */}
       <section className="mt-20">
-        <SectionHead eyebrow={`${quotes.length} of ${b.quotes.length} most recent`} title="Voices" />
-        <div className="mb-6 flex flex-wrap gap-2">
-          <Chip active={!aspect} onClick={() => pickAspect(null)}>
-            All aspects
-          </Chip>
-          {meta.aspects.map((a) => (
-            <Chip key={a.id} active={aspect === a.id} onClick={() => pickAspect(a.id)}>
-              {a.label}
-            </Chip>
-          ))}
-          <span className="mx-1 h-6 w-px bg-line" />
-          {["praise", "defect", "neutral"].map((k) => (
-            <Chip key={k} active={kind === k} onClick={() => setKind(kind === k ? null : k)} className="capitalize">
-              {k}
-            </Chip>
-          ))}
-        </div>
-        <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
-          {quotes.map((q, i) => (
-            <figure key={i} className="mb-4 break-inside-avoid rounded-2xl border border-line bg-panel p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="eyebrow">{q.aspect}</span>
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: scoreColor(5 + 2.5 * q.sentiment) }} title={`sentiment ${q.sentiment}`} />
+        <SectionHead eyebrow={`${b.sources.length} thread${b.sources.length === 1 ? "" : "s"} analysed`} title="Sources" />
+        {!b.sources.length && <p className="text-sm text-muted">No analysed threads for this build yet.</p>}
+        <ul>
+          {b.sources.map((src) => (
+            <li key={src.url} className="border-b border-line py-4 last:border-0">
+              <a href={src.url} target="_blank" rel="noreferrer noopener" className="group inline-flex items-baseline gap-2">
+                <span className="text-[15.5px] transition-colors group-hover:text-gold">{src.title}</span>
+                <ExternalLink size={12} className="text-muted" />
+              </a>
+              <div className="mt-1 text-xs text-muted">
+                {src.source} · {src.forum} · {src.findings} findings · {fmtDate(src.first_post, "month")}
+                {src.last_post.slice(0, 7) !== src.first_post.slice(0, 7) && ` – ${fmtDate(src.last_post, "month")}`}
               </div>
-              <blockquote className="font-display text-[21px] leading-snug">“{q.quote}”</blockquote>
-              <figcaption className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <SourceTag kind={q.source_kind} name={q.source} />
-                {q.handle && <span className="text-[11.5px] text-faint">@{q.handle}</span>}
-                <EvidenceTag evidence={q.evidence} />
-                <span className="ml-auto text-[11px] text-faint">{fmtDate(q.posted_at)}</span>
-                {q.url && (
-                  <a href={q.url} target="_blank" rel="noreferrer noopener" className="text-muted hover:text-paper">
-                    <ExternalLink size={12} />
-                  </a>
-                )}
-              </figcaption>
-            </figure>
+              {src.summary && <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-paper/80">{src.summary}</p>}
+            </li>
           ))}
-        </div>
+        </ul>
       </section>
 
       <AnimatePresence>

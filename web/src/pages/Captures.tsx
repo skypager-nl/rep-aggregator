@@ -1,15 +1,18 @@
-import { Check, Copy, Eye, EyeOff, Puzzle } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink, Eye, EyeOff, Loader2, Puzzle, RotateCw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { useApi, type CaptureLog, type CapturedThread } from "../api";
+import { postJson, useApi, type CaptureLog, type CapturedThread, type Extraction } from "../api";
 import { ErrorNote, PageLoading, SectionHead } from "../components/ui";
-import { ago, fmtDate } from "../lib/format";
+import { ago, cx, fmtDate } from "../lib/format";
 
 export default function Captures() {
-  const { data, error } = useApi<{ threads: CapturedThread[]; log: CaptureLog[] }>("captures");
+  const [nonce, setNonce] = useState(0);
+  const { data, error } = useApi<{ threads: CapturedThread[]; log: CaptureLog[] }>(`captures?n=${nonce}`);
+  const { data: ex } = useApi<Extraction>(`extraction?n=${nonce}`);
   if (error) return <ErrorNote error={error} />;
   if (!data) return <PageLoading />;
   const now = new Date().toISOString();
+  const refresh = () => setNonce((n) => n + 1);
 
   return (
     <div className="mx-auto max-w-[1360px] px-4 md:px-10">
@@ -17,40 +20,32 @@ export default function Captures() {
         <div className="eyebrow mb-4">RWI · from your own browsing</div>
         <h1 className="font-display text-[52px] leading-none tracking-tight md:text-[72px]">Captures</h1>
         <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted">
-          Threads you sent with the Chrome extension. Each capture is your own visit at reading pace — nothing here is crawled in the background.
+          Threads you sent with the Chrome extension. Claude reads each thread and turns it into findings that feed the scores — only the conclusion and a link to the
+          source are kept on the site.
         </p>
+        {ex && !ex.configured && (
+          <div className="mt-6 flex max-w-2xl items-start gap-3 rounded-xl border border-warn/30 bg-warn/[0.06] px-4 py-3 text-sm text-warn">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            Analysis is paused: add your Anthropic API key under Settings → Apps → Rep Index → Configuration.
+          </div>
+        )}
       </header>
 
       <div className="grid gap-12 lg:grid-cols-[1fr_380px]">
         <section>
-          <SectionHead eyebrow={`${data.threads.length} threads`} title="Captured threads" />
+          <SectionHead
+            eyebrow={`${data.threads.length} threads${ex?.configured ? ` · ${ex.model}` : ""}`}
+            title="Analysed threads"
+            action={
+              <button onClick={refresh} className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-paper">
+                <RotateCw size={13} /> Refresh
+              </button>
+            }
+          />
           {!data.threads.length && <p className="text-sm text-muted">Nothing yet — open an RWI thread and click the extension’s button.</p>}
           <ul>
             {data.threads.map((t) => (
-              <li key={t.thread_id} className="border-b border-line">
-                <Link to={`/captures/${t.thread_id}`} className="group grid gap-2 py-4 sm:grid-cols-[1fr_auto] sm:items-center">
-                  <div className="min-w-0">
-                    <div className="truncate text-[16px] transition-colors group-hover:text-gold">{t.title}</div>
-                    <div className="mt-1 text-xs text-muted">
-                      {t.forum} · captured {ago(t.last_captured, now)}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-5 text-xs text-muted">
-                    <span className="flex items-center gap-2">
-                      <span className="h-1 w-16 overflow-hidden rounded-full bg-white/10">
-                        <span className="block h-full bg-gold" style={{ width: `${(100 * t.pages_captured) / t.pages}%` }} />
-                      </span>
-                      <span className="tnum">
-                        {t.pages_captured}/{t.pages} pages
-                      </span>
-                    </span>
-                    <span className="tnum">{t.posts} posts</span>
-                    <span className="tnum">
-                      {t.photos_stored}/{t.photos} photos
-                    </span>
-                  </div>
-                </Link>
-              </li>
+              <ThreadRow key={t.thread_id} t={t} now={now} busy={ex?.busy === t.thread_id} onQueued={refresh} />
             ))}
           </ul>
         </section>
@@ -66,7 +61,7 @@ export default function Captures() {
                     #{l.thread_id} · p{l.page}
                   </span>
                   <span className="tnum shrink-0">
-                    +{l.new_posts} posts · +{l.photos} photos · {fmtDate(l.captured_at)}
+                    +{l.new_posts} posts · {fmtDate(l.captured_at)}
                   </span>
                 </li>
               ))}
@@ -78,11 +73,55 @@ export default function Captures() {
   );
 }
 
+function ThreadRow({ t, now, busy, onQueued }: { t: CapturedThread; now: string; busy: boolean; onQueued: () => void }) {
+  const builds: string[] = t.builds ? JSON.parse(t.builds) : [];
+  const stale = !t.extracted_at || t.extracted_at < t.last_captured;
+  const status = busy
+    ? { label: "Analysing…", tone: "text-gold border-gold/40", icon: <Loader2 size={11} className="animate-spin" /> }
+    : t.extract_error
+      ? { label: "Failed", tone: "text-bad border-bad/30", icon: <AlertTriangle size={11} /> }
+      : stale
+        ? { label: "Queued", tone: "text-muted border-line", icon: null }
+        : { label: "Analysed", tone: "text-good border-good/30", icon: <Sparkles size={11} /> };
+  return (
+    <li className="border-b border-line py-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <a href={t.url} target="_blank" rel="noreferrer noopener" className="group min-w-0 flex-1">
+          <span className="text-[16px] transition-colors group-hover:text-gold">{t.title}</span>
+          <ExternalLink size={12} className="ml-1.5 inline text-muted" />
+          <div className="mt-1 text-xs text-muted">
+            {t.forum} · {t.pages_captured}/{t.pages} pages · {t.photos_stored} photos · captured {ago(t.last_captured, now)}
+            {t.extract_cost != null && ` · analysis $${t.extract_cost.toFixed(2)}`}
+          </div>
+        </a>
+        <span className={cx("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider", status.tone)}>
+          {status.icon}
+          {status.label}
+        </span>
+      </div>
+      {t.summary && !stale && <p className="mt-3 max-w-3xl text-[14px] leading-relaxed text-paper/85">{t.summary}</p>}
+      {t.extract_error && <p className="mt-3 text-xs text-bad">{t.extract_error}</p>}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {builds.map((id) => (
+          <Link key={id} to={`/build/${id}`} className="rounded-full border border-line px-2.5 py-0.5 font-mono text-[11px] text-muted hover:border-line-strong hover:text-paper">
+            {id}
+          </Link>
+        ))}
+        {!busy && (
+          <button onClick={() => postJson(`captures/${t.thread_id}/extract`).then(onQueued)} className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-paper">
+            <RotateCw size={11} /> Analyse again
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
 function Setup() {
   const { data } = useApi<{ token: string; port: number }>("capture/setup");
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
-  const endpoint = `http://homeassistant.local:${data?.port ?? 8766}`;
+  const endpoint = `http://<your-pi-ip>:${data?.port ?? 8766}`;
   const copy = (label: string, v: string) => {
     navigator.clipboard.writeText(v).then(() => {
       setCopied(label);
@@ -99,7 +138,7 @@ function Setup() {
         <li>
           Chrome → <span className="font-mono text-paper">chrome://extensions</span> → Developer mode → Load unpacked → the repo’s <span className="font-mono text-paper">extension/</span> folder.
         </li>
-        <li>Open the extension’s options and paste the address and token below.</li>
+        <li>In the extension’s options, enter the Pi’s IP address (not homeassistant.local) and the token below.</li>
         <li>On any RWI thread, click the extension icon → Capture whole thread.</li>
       </ol>
       <Field label="Address" value={endpoint} onCopy={() => copy("addr", endpoint)} copied={copied === "addr"} />

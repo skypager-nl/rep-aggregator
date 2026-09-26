@@ -128,7 +128,7 @@ export type BuildDetail = BuildSummary & {
   defects: Defect[];
   photo_list: Photo[];
   prices: { dealer: string; price: number; observed_at: string }[];
-  quotes: Quote[];
+  sources: Source[];
   qc: QcVerdict[];
   qc_trend: { period: string; gl_rate: number; n: number }[];
   siblings: BuildLite[];
@@ -206,6 +206,13 @@ export function fetchJson<T>(path: string): Promise<T> {
   return cache.get(path) as Promise<T>;
 }
 
+export async function postJson<T>(path: string): Promise<T> {
+  const r = await fetch(BASE + path, { method: "POST" });
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  cache.clear();
+  return r.json();
+}
+
 export function useApi<T>(path: string | null): { data: T | undefined; error: Error | undefined } {
   const [state, setState] = useState<{ path: string | null; data?: T; error?: Error }>({ path });
   useEffect(() => {
@@ -235,23 +242,13 @@ export type CapturedThread = {
   photos_stored: number;
   first_seen: string;
   last_captured: string;
+  summary: string | null;
+  extracted_at: string | null;
+  extract_error: string | null;
+  extract_cost: number | null;
+  extract_model: string | null;
+  builds: string | null;
 };
+export type Extraction = { configured: boolean; model: string; effort: string; busy: string | null };
+export type Source = { url: string; title: string; forum: string | null; summary: string | null; source: string; findings: number; first_post: string; last_post: string };
 export type CaptureLog = { id: number; thread_id: string; page: number; captured_at: string; posts: number; new_posts: number; photos: number; status: string };
-export type CapturedPost = {
-  id: number;
-  external_id: string;
-  number: number | null;
-  page: number;
-  posted_at: string;
-  body: string;
-  quotes: string | null;
-  reactions: number | null;
-  is_starter: number;
-  url: string;
-  handle: string;
-  joined: string | null;
-  post_count: number | null;
-  reputation: number;
-  banners: string | null;
-  photos: { url: string; path: string | null }[];
-};

@@ -340,3 +340,44 @@ def _prices(conn, rng, build_id, fid, ref, released, end) -> None:
                 (build_id, dealer, dealer.split(":")[1], price, d.isoformat()),
             )
             d += timedelta(days=30)
+
+
+def purge(conn: sqlite3.Connection) -> dict:
+    """Remove everything the demo seed invented; keep real references, factory names/aliases,
+    genuine photos, and all captured + extracted data. Scores are recomputed from real claims."""
+    db.init(conn)
+    counts = {}
+
+    def run(label, sql, params=()):
+        counts[label] = conn.execute(sql, params).rowcount
+
+    demo_posts = "SELECT id FROM post WHERE external_id LIKE 'demo-%'"
+    run("qc_verdict", f"DELETE FROM qc_verdict WHERE post_id IN ({demo_posts})")
+    run("claim", "DELETE FROM claim WHERE model = 'demo'")
+    run("post", "DELETE FROM post WHERE external_id LIKE 'demo-%'")
+    run("author", "DELETE FROM author WHERE external_id IS NULL AND id NOT IN (SELECT author_id FROM post WHERE author_id IS NOT NULL)")
+    run("price_point", "DELETE FROM price_point WHERE thread_id IS NULL")
+    run("event", "DELETE FROM event")
+    # Builds with no real evidence left are demo inventions.
+    live = """SELECT build_id FROM claim UNION SELECT build_id FROM qc_verdict UNION SELECT build_id FROM price_point"""
+    run("defect", f"DELETE FROM defect WHERE build_id NOT IN ({live})")
+    run("photo", f"DELETE FROM photo WHERE build_id IS NOT NULL AND build_id NOT IN ({live})")
+    run("score", "DELETE FROM score")
+    run("tier", "DELETE FROM tier")
+    run("build", f"DELETE FROM build WHERE id NOT IN ({live})")
+    run("source", "DELETE FROM source WHERE id LIKE 'blog:demo%' OR id LIKE 'tg:dealer-%'")
+    # Factory founding years and statuses were invented; names and aliases are real.
+    run("factory_reset", "UPDATE factory SET founded = NULL, status = 'unknown' WHERE notes IS NULL")
+    # Build dates/statuses from the demo are gone with the builds; the real ones came from extraction.
+    db.set_meta(conn, "dataset", "live")
+    conn.execute("DELETE FROM meta WHERE key IN ('latest_as_of', 'previous_as_of')")
+    conn.commit()
+
+    today = date.today()
+    scoring.compute(conn, today)
+    db.set_meta(conn, "latest_as_of", today.isoformat())
+    db.set_meta(conn, "previous_as_of", today.isoformat())
+    conn.commit()
+    counts["remaining_builds"] = conn.execute("SELECT COUNT(*) FROM build").fetchone()[0]
+    counts["remaining_claims"] = conn.execute("SELECT COUNT(*) FROM claim").fetchone()[0]
+    return counts

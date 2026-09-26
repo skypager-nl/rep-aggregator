@@ -12,6 +12,13 @@ repagg import-photos /app/genuine
 # Report whether the RWI proxy route is safe (contacts an IP-echo service only, never RWI).
 repagg egress-check || true
 
+# One-shot demo purge (owner-requested): back up the database first, then purge.
+if [ -f /share/rep_aggregator/purge-demo.request ]; then
+  rm -f /share/rep_aggregator/purge-demo.request
+  cp /data/repagg.db "/data/repagg.pre-purge-$(date +%Y%m%d-%H%M%S).db"
+  repagg purge-demo > /share/rep_aggregator/purge-demo.result 2>&1 || true
+fi
+
 # One-shot, owner-approved RWI probe: runs only if the request file exists, then removes it.
 PROBE=/share/rep_aggregator
 if [ -f "$PROBE/probe.request" ]; then

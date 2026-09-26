@@ -12,6 +12,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="create the database schema")
     sub.add_parser("demo", help="replace the database with synthetic demo data")
+    sub.add_parser("purge-demo", help="remove all synthetic demo data, keep real captures and findings")
     sub.add_parser("score", help="recompute scores and tiers as of today")
     photo = sub.add_parser("ref-photo", help="attach a photo of the genuine reference")
     photo.add_argument("reference")
@@ -27,6 +28,8 @@ def main() -> None:
     probe.add_argument("--only", help="comma-separated target names, e.g. rss")
     ing = sub.add_parser("ingest-file", help="ingest a saved RWI thread page (.html or .mhtml)")
     ing.add_argument("file")
+    ex = sub.add_parser("extract", help="analyse a captured thread with Claude (uses the API; costs money)")
+    ex.add_argument("thread_id")
     sub.add_parser("egress-check", help="verify the RWI crawler's proxy exits away from home (IP-echo only)")
     serve = sub.add_parser("serve", help="run the web app")
     serve.add_argument("--host", default="0.0.0.0")
@@ -86,6 +89,16 @@ def main() -> None:
         f = Path(args.file)
         html = html_from_mhtml(f) if f.suffix == ".mhtml" else f.read_text()
         print(ingest_rwi_page(conn, html, url=""))
+    elif args.cmd == "extract":
+        import json as _json
+
+        from .extract import extract_thread
+
+        print(_json.dumps(extract_thread(conn, args.thread_id), indent=2))
+    elif args.cmd == "purge-demo":
+        from . import demo
+
+        print(demo.purge(conn))
     elif args.cmd == "score":
         today = date.today()
         previous = db.get_meta(conn, "latest_as_of")

@@ -20,6 +20,8 @@ MIGRATIONS = {
     "post": {"thread_id": "TEXT", "page": "INTEGER", "number": "INTEGER", "reactions": "INTEGER", "is_starter": "INTEGER", "quotes": "TEXT"},
     "author": {"external_id": "TEXT", "reactions": "INTEGER", "banners": "TEXT"},
     "photo": {"url": "TEXT"},
+    "thread": {"summary": "TEXT", "extracted_at": "TEXT", "extract_model": "TEXT", "extract_error": "TEXT", "extract_cost": "REAL", "builds": "TEXT"},
+    "price_point": {"thread_id": "TEXT"},
 }
 
 

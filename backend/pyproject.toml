@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn>=0.32",
     "httpx[socks]>=0.28",
     "selectolax>=0.3.21",
+    "anthropic>=1.0",
 ]
 
 [project.scripts]

@@ -5,6 +5,8 @@ import hmac
 import os
 import secrets
 import sqlite3
+import threading
+import time
 from collections import defaultdict
 from collections.abc import Iterator
 
@@ -209,22 +211,19 @@ def build(build_id: str, c: sqlite3.Connection = Depends(conn)):
     out["photo_list"] = [dict(r) for r in c.execute("SELECT id, aspect, path, width, height FROM photo WHERE build_id = ?", (build_id,))]
     out["prices"] = [dict(r) for r in c.execute(
         "SELECT dealer, price_usd AS price, observed_at FROM price_point WHERE build_id = ? ORDER BY observed_at", (build_id,))]
-    out["quotes"] = [dict(r) for r in c.execute(
+    out["sources"] = [dict(r) for r in c.execute(
         """
-        SELECT cl.aspect, cl.kind, cl.sentiment, cl.evidence, cl.quote, p.posted_at, p.url, p.thread_title,
-               s.name AS source, s.kind AS source_kind, a.handle, a.reputation
-        FROM claim cl
-        JOIN post p ON p.id = cl.post_id
-        JOIN source s ON s.id = p.source_id
-        LEFT JOIN author a ON a.id = p.author_id
-        WHERE cl.build_id = ?
-        ORDER BY p.posted_at DESC LIMIT 80
+        SELECT t.url, t.title, t.forum, t.summary, t.last_captured, s.name AS source, COUNT(cl.id) AS findings,
+               MIN(p.posted_at) AS first_post, MAX(p.posted_at) AS last_post
+        FROM claim cl JOIN post p ON p.id = cl.post_id JOIN thread t ON t.source_id = p.source_id AND t.external_id = p.thread_id
+        JOIN source s ON s.id = t.source_id
+        WHERE cl.build_id = ? GROUP BY t.source_id, t.external_id ORDER BY last_post DESC
         """,
         (build_id,),
     )]
     out["qc"] = [dict(r) for r in c.execute(
         """
-        SELECT q.verdict, q.gl_votes, q.rl_votes, q.flaws, q.decided_at, p.thread_title, p.url, s.name AS source
+        SELECT q.verdict, q.gl_votes, q.rl_votes, q.flaws, q.decided_at, p.thread_title, s.name AS source
         FROM qc_verdict q JOIN post p ON p.id = q.post_id JOIN source s ON s.id = p.source_id
         WHERE q.build_id = ? ORDER BY q.decided_at DESC LIMIT 24
         """,
@@ -450,6 +449,7 @@ def captures(c: sqlite3.Connection = Depends(conn)):
     threads = [dict(r) for r in c.execute(
         """
         SELECT t.external_id AS thread_id, t.url, t.title, t.forum, t.pages, t.first_seen, t.last_captured,
+               t.summary, t.extracted_at, t.extract_error, t.extract_cost, t.extract_model, t.builds,
                COUNT(DISTINCT p.page) AS pages_captured, COUNT(DISTINCT p.id) AS posts,
                (SELECT COUNT(*) FROM photo ph JOIN post pp ON pp.id = ph.post_id WHERE pp.source_id = t.source_id AND pp.thread_id = t.external_id) AS photos,
                (SELECT COUNT(*) FROM photo ph JOIN post pp ON pp.id = ph.post_id WHERE pp.source_id = t.source_id AND pp.thread_id = t.external_id AND ph.path != '') AS photos_stored
@@ -461,26 +461,55 @@ def captures(c: sqlite3.Connection = Depends(conn)):
     return {"threads": threads, "log": log}
 
 
-@app.get("/api/captures/{thread_id}")
-def captured_thread(thread_id: str, c: sqlite3.Connection = Depends(conn)):
-    t = c.execute("SELECT * FROM thread WHERE source_id = 'rwi' AND external_id = ?", (thread_id,)).fetchone()
-    if not t:
+@app.post("/api/captures/{thread_id}/extract")
+def reextract(thread_id: str, c: sqlite3.Connection = Depends(conn)):
+    """Queue a thread for (re-)analysis; the worker picks it up within ~30 s."""
+    n = c.execute("UPDATE thread SET extracted_at = NULL, extract_error = NULL WHERE source_id = 'rwi' AND external_id = ?", (thread_id,)).rowcount
+    c.commit()
+    if not n:
         raise HTTPException(404)
-    posts = [dict(r) for r in c.execute(
-        """
-        SELECT p.id, p.external_id, p.number, p.page, p.posted_at, p.body, p.quotes, p.reactions, p.is_starter, p.url,
-               a.handle, a.joined, a.post_count, a.reputation, a.banners
-        FROM post p LEFT JOIN author a ON a.id = p.author_id
-        WHERE p.source_id = 'rwi' AND p.thread_id = ? ORDER BY p.page, p.number
-        """,
-        (thread_id,),
-    )]
-    photos = defaultdict(list)
-    for r in c.execute("SELECT post_id, url, path FROM photo WHERE post_id IN (SELECT id FROM post WHERE source_id = 'rwi' AND thread_id = ?) ORDER BY id", (thread_id,)):
-        photos[r["post_id"]].append({"url": r["url"], "path": r["path"] or None})
-    for p in posts:
-        p["photos"] = photos.get(p["id"], [])
-    return {**dict(t), "posts": posts}
+    return {"queued": thread_id}
+
+
+@app.get("/api/extraction")
+def extraction_status():
+    from .extract import settings
+
+    cfg = settings()
+    return {"configured": bool(cfg["api_key"]), "model": cfg["model"], "effort": cfg["effort"], "busy": _worker_state.get("busy")}
+
+
+_worker_state: dict = {}
+
+
+def _worker() -> None:
+    """Analyse newly captured threads in the background, one at a time."""
+    from .extract import extract_thread, pending, record_error, settings
+
+    while True:
+        time.sleep(30)
+        if not settings()["api_key"]:
+            continue
+        try:
+            c = db.connect(DB_PATH)
+            db.init(c)
+            for thread_id in pending(c, settle_seconds=0 if _worker_state.get("manual") else 90):
+                _worker_state["busy"] = thread_id
+                try:
+                    r = extract_thread(c, thread_id)
+                    print(f"[extract] thread {thread_id}: {r['claims']} claims, {len(r['builds'])} builds, ${r['cost_usd']}", flush=True)
+                except Exception as e:  # keep the worker alive; the error is shown on the Captures page
+                    record_error(c, thread_id, f"{type(e).__name__}: {e}")
+                    print(f"[extract] thread {thread_id} failed: {e}", flush=True)
+                finally:
+                    _worker_state["busy"] = None
+            c.close()
+        except Exception as e:
+            print(f"[extract] worker error: {e}", flush=True)
+
+
+if os.environ.get("REPAGG_WORKER", "1") != "0":
+    threading.Thread(target=_worker, name="extract-worker", daemon=True).start()
 
 
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)
