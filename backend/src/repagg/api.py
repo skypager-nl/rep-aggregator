@@ -380,12 +380,15 @@ def factories(c: sqlite3.Connection = Depends(conn)):
         if alias != facs[fid]["name"]:
             facs[fid]["aliases"].append(alias)
     for b in _build_summaries(c):
-        facs[b["factory_id"]]["builds"].append({k: b[k] for k in ("id", "reference_id", "family", "version", "label", "tier", "score", "status", "open_defects")})
+        facs[b["factory_id"]]["builds"].append({k: b[k] for k in ("id", "reference_id", "family", "version", "label", "tier", "score", "status", "open_defects", "claims")})
     for f in facs.values():
         current = [b for b in f["builds"] if b["status"] == "current" and b["score"] is not None]
         f["avg_score"] = round(sum(b["score"] for b in current) / len(current), 2) if current else None
         f["references"] = sorted({b["reference_id"] for b in f["builds"]})
         f["tier_counts"] = {t: sum(1 for b in current if b["tier"] == t) for t, _ in scoring.TIERS}
+        f["findings"] = sum(b.get("claims") or 0 for b in f["builds"])
+        # One model and nothing but a guide mention: shown in the "niche" section until evidence arrives.
+        f["niche"] = len(f["builds"]) <= 1 and f["findings"] == 0
     return sorted(facs.values(), key=lambda f: (f["avg_score"] is None, -(f["avg_score"] or 0)))
 
 

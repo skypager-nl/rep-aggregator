@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { TIER_COLOR } from "../lib/format";
 
 function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -140,8 +141,8 @@ export function TierStack({ counts }: { counts: Record<string, number> }) {
   if (!total) return <div className="h-1.5 rounded-full bg-white/5" />;
   return (
     <div className="flex h-1.5 overflow-hidden rounded-full bg-white/5">
-      {(["S", "A", "B", "C"] as const).map((t) =>
-        counts[t] ? <div key={t} style={{ width: `${(counts[t] / total) * 100}%`, background: `var(--color-tier-${t.toLowerCase()})` }} title={`${counts[t]} × ${t}`} /> : null,
+      {(["A", "B", "C"] as const).map((t) =>
+        counts[t] ? <div key={t} style={{ width: `${(counts[t] / total) * 100}%`, background: TIER_COLOR[t] }} title={`${counts[t]} × Tier ${t}`} /> : null,
       )}
     </div>
   );

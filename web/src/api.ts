@@ -48,7 +48,7 @@ export type BuildLite = {
   claims?: number;
 };
 
-export type Tier = "S" | "A" | "B" | "C";
+export type Tier = "A" | "B" | "C";
 export type BuildStatus = "current" | "superseded" | "discontinued";
 
 export type BuildSummary = {
@@ -161,6 +161,8 @@ export type FactoryListItem = {
   avg_score: number | null;
   references: string[];
   tier_counts: Record<Tier, number>;
+  findings: number;
+  niche: boolean;
 };
 
 export type FeedEvent = {

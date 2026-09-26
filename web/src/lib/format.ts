@@ -18,14 +18,13 @@ export function ago(iso: string, now: string) {
   return `${(days / 365).toFixed(1)}y ago`;
 }
 
-export const TIER_ORDER = ["S", "A", "B", "C"] as const;
+export const TIER_ORDER = ["A", "B", "C"] as const;
 export const TIER_COLOR: Record<string, string> = {
-  S: "var(--color-tier-s)",
-  A: "var(--color-tier-a)",
-  B: "var(--color-tier-b)",
-  C: "var(--color-tier-c)",
+  A: "var(--color-tier-s)",
+  B: "var(--color-tier-a)",
+  C: "var(--color-tier-b)",
 };
-export const TIER_NAME: Record<string, string> = { S: "Reference grade", A: "Excellent", B: "Solid", C: "Compromised" };
+export const TIER_NAME: Record<string, string> = { A: "Tier A", B: "Tier B", C: "Tier C" };
 
 /** 0..10 score -> colour on a muted red → sand → green scale. */
 export function scoreColor(v: number | null | undefined, alpha = 1) {

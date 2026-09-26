@@ -1,4 +1,6 @@
+import { ChevronDown } from "lucide-react";
 import { motion } from "motion/react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { useApi, type FactoryListItem, type Meta } from "../api";
 import { TierStack } from "../components/Charts";
@@ -8,8 +10,12 @@ import { fmtScore, scoreColor } from "../lib/format";
 export default function Factories() {
   const { data, error } = useApi<FactoryListItem[]>("factories");
   const { data: meta } = useApi<Meta>("meta");
+  const [showNiche, setShowNiche] = useState(false);
+  const [q, setQ] = useState("");
   if (error) return <ErrorNote error={error} />;
   if (!data) return <PageLoading />;
+  const main = data.filter((f) => !f.niche);
+  const niche = data.filter((f) => f.niche && (!q || f.name.toLowerCase().includes(q.toLowerCase())));
 
   return (
     <div className="mx-auto max-w-[1360px] px-4 md:px-10">
@@ -30,7 +36,7 @@ export default function Factories() {
         </p>
       </header>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {data.map((f, i) => (
+        {main.map((f, i) => (
           <motion.div key={f.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04, duration: 0.5 }}>
             <Link to={`/factory/${f.id}`} className="group flex h-full flex-col rounded-2xl border border-line bg-panel p-6 transition-colors hover:border-line-strong">
               <div className="flex items-start justify-between">
@@ -63,6 +69,36 @@ export default function Factories() {
           </motion.div>
         ))}
       </div>
+
+      <section className="mt-16">
+        <button onClick={() => setShowNiche((v) => !v)} className="flex w-full items-center justify-between border-b border-line pb-3 text-left">
+          <span>
+            <span className="eyebrow block">One model each, no findings yet</span>
+            <span className="font-display text-[28px] leading-none">Niche factories ({data.filter((f) => f.niche).length})</span>
+          </span>
+          <ChevronDown size={18} className={showNiche ? "rotate-180 transition-transform" : "transition-transform"} />
+        </button>
+        {showNiche && (
+          <div className="mt-4">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search niche factories…" className="mb-4 w-64 rounded-full border border-line bg-panel px-3 py-1.5 text-[13px] outline-none" />
+            <ul className="grid gap-x-8 sm:grid-cols-2 lg:grid-cols-3">
+              {niche.map((f) => (
+                <li key={f.id} className="border-b border-line py-2.5 text-[14px]">
+                  <Link to={`/factory/${f.id}`} className="hover:text-gold">
+                    {f.name}
+                  </Link>
+                  {f.builds[0] && (
+                    <Link to={`/build/${f.builds[0].id}`} className="ml-2 font-mono text-[11.5px] text-muted hover:text-paper">
+                      {f.builds[0].reference_id}
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-faint">Named by the community guide for a single model. They move up to the main list once real findings arrive.</p>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

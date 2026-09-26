@@ -161,6 +161,19 @@ def import_guide(conn: sqlite3.Connection, path: Path) -> dict:
                 best[build_id] = (prior, e["rank"], e["quality"])
     for build_id, (prior, rank, quality) in best.items():
         conn.execute("INSERT INTO baseline VALUES (?, ?, ?, ?, ?, ?, ?)", (build_id, GUIDE_ID, prior, PRIOR_WEIGHT, rank, quality, updated))
+    # Tidy up what an earlier import created but this one no longer names (renamed factories, etc.).
+    evidence = ("SELECT build_id FROM claim UNION SELECT build_id FROM qc_verdict UNION SELECT build_id FROM price_point "
+                "UNION SELECT build_id FROM event WHERE build_id IS NOT NULL UNION SELECT build_id FROM baseline")
+    stale = [r[0] for r in conn.execute(f"SELECT id FROM build WHERE id NOT IN ({evidence})")]
+    for bid in stale:
+        for table in ("release", "score", "tier", "defect"):
+            conn.execute(f"DELETE FROM {table} WHERE build_id = ?", (bid,))
+        conn.execute("UPDATE photo SET build_id = NULL WHERE build_id = ?", (bid,))
+        conn.execute("DELETE FROM build WHERE id = ?", (bid,))
+    for (fid,) in conn.execute("SELECT id FROM factory WHERE notes = 'from WMTB guide' AND id NOT IN (SELECT factory_id FROM build) "
+                               "AND id NOT IN (SELECT factory_id FROM event WHERE factory_id IS NOT NULL)").fetchall():
+        conn.execute("DELETE FROM factory_alias WHERE factory_id = ?", (fid,))
+        conn.execute("DELETE FROM factory WHERE id = ?", (fid,))
     conn.execute("INSERT INTO meta(key, value) VALUES ('guide_wmtb', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                  (json.dumps({"name": GUIDE_NAME, "url": GUIDE_URL, "updated": updated, "file": path.name}),))
     conn.commit()
@@ -206,6 +219,7 @@ def _factories(raw: str) -> list[tuple[str, str | None, str | None]]:
             name = re.sub(word, " ", name, flags=re.I)
         name = re.sub(r"\bv\d+(?:\.\d+)?\b|\bfactory\b", " ", name, flags=re.I)
         name = re.sub(r"\s+", " ", name).strip(" -,")
+        name = re.sub(r"(?<=\w) F$", "F", name)  # the sheet writes some as "3S F", "TC F"
         if name:
             out.append((name, " ".join(variant_bits) or None, note))
     return out
@@ -249,6 +263,7 @@ def _factory(conn: sqlite3.Connection, name: str) -> str | None:
     if not fid:
         return None
     conn.execute("INSERT OR IGNORE INTO factory(id, name, status, notes, needs_review) VALUES (?, ?, 'unknown', 'from WMTB guide', 0)", (fid, name))
+    conn.execute("UPDATE factory SET name = ? WHERE id = ? AND notes = 'from WMTB guide'", (name, fid))  # pick up name clean-ups
     conn.execute("INSERT OR IGNORE INTO factory_alias VALUES (?, ?)", (name, fid))
     return fid
 

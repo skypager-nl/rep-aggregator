@@ -39,7 +39,7 @@ PRIOR_WEIGHT = 1.5  # in claim-weight units; a typical claim weighs ~0.5-1.5
 PRIOR_SD = 2.0
 Z = 1.0  # ~one-sided 84% bound; conservative without being punishing
 
-TIERS = [("S", 7.8), ("A", 7.0), ("B", 6.2), ("C", -math.inf)]
+TIERS = [("A", 7.8), ("B", 7.0), ("C", -math.inf)]  # three tiers: A (guide NWBIG), B (Super Rep), C (the rest)
 
 
 def claim_value(sentiment: float) -> float:

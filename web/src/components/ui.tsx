@@ -47,7 +47,7 @@ export function Delta({ now, prev, digits = 1 }: { now: number | null | undefine
 
 export function TierMove({ from, to }: { from: string | null; to: string | null }) {
   if (!from || !to || from === to) return null;
-  const up = "SABC".indexOf(to) < "SABC".indexOf(from);
+  const up = "ABC".indexOf(to) < "ABC".indexOf(from);
   return (
     <span className={cx("inline-flex items-center gap-1 font-mono text-[11px]", up ? "text-good" : "text-bad")}>
       {from}
