@@ -4,7 +4,7 @@ import { Link } from "react-router";
 import { useApi, type ReferenceListItem } from "../api";
 import { Chip, ErrorNote, PageLoading } from "../components/ui";
 import WatchImage from "../components/WatchImage";
-import { TIER_COLOR, TIER_NAME, TIER_ORDER, fmtScore } from "../lib/format";
+import { TIER_COLOR, TIER_NAME, TIER_ORDER, fmtScore, ver } from "../lib/format";
 
 export default function Tiers() {
   const { data, error } = useApi<ReferenceListItem[]>("references");
@@ -118,7 +118,7 @@ export default function Tiers() {
                         }}
                       >
                         <span>
-                          {b.factory} <span className="text-muted">{b.version}</span>
+                          {b.factory} <span className="text-muted">{ver(b.version)}</span>
                         </span>
                         <span className="tnum font-mono text-[11px] text-muted group-hover:text-paper">{fmtScore(b.score)}</span>
                       </Link>

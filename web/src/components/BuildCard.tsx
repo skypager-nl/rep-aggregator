@@ -2,7 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import { motion } from "motion/react";
 import { Link } from "react-router";
 import type { BuildSummary } from "../api";
-import { fmtPrice, fmtScore, guideLabel } from "../lib/format";
+import { fmtPrice, fmtScore, guideLabel, ver } from "../lib/format";
 import { Delta, ScoreBar, StatusPill, TierBadge } from "./ui";
 import WatchImage from "./WatchImage";
 
@@ -29,7 +29,8 @@ export default function BuildCard({ b, index = 0, showRef = true }: { b: BuildSu
           <div className="flex items-baseline justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate font-display text-[22px] leading-tight">
-                {b.factory} <span className="text-muted">{b.version}</span>
+                {b.factory} <span className="text-muted">{ver(b.version)}</span>
+                {!ver(b.version) && b.movement && <span className="ml-1.5 font-mono text-[11px] text-faint">{b.movement}</span>}
               </div>
               {showRef && (
                 <div className="mt-0.5 truncate text-[12.5px] text-muted">
@@ -67,7 +68,7 @@ export function BuildRowMini({ b }: { b: Pick<BuildSummary, "id" | "factory" | "
       <TierBadge tier={b.tier} size="sm" />
       <span className="font-mono text-[11.5px] text-muted">{b.reference_id}</span>
       <span className="flex-1 truncate">
-        {b.factory} {b.version}
+        {b.factory} {ver(b.version)}
       </span>
       <span className="tnum text-sm">{fmtScore(b.score)}</span>
       {b.prevScore !== undefined && <Delta now={b.score} prev={b.prevScore} />}

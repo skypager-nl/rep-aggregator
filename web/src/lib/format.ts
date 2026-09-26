@@ -51,3 +51,8 @@ export function guideLabel(rank: number | null | undefined, quality: string | nu
   if (!rank) return null;
   return `${GUIDE_RANK[rank]}${quality ? ` · ${GUIDE_QUALITY[quality]}` : ""}`;
 }
+
+/** Version label for display: nothing when the source didn't say which release it is. */
+export function ver(v: string | null | undefined): string {
+  return !v || v.toLowerCase() === "unspecified" ? "" : v;
+}

@@ -17,7 +17,7 @@ import {
 } from "../components/ui";
 import WatchImage from "../components/WatchImage";
 import { compare, useCompare } from "../lib/compare";
-import { cx, fmtDate, fmtPrice, fmtScore, guideLabel, scoreColor } from "../lib/format";
+import { cx, fmtDate, fmtPrice, fmtScore, guideLabel, scoreColor, ver } from "../lib/format";
 
 const DEALER_COLORS = ["#c9a46a", "#7fb89a", "#8fa8d9", "#d9826f"];
 
@@ -107,7 +107,7 @@ export default function Build() {
             {b.reference_name} · <span className="text-gold">{b.reference_id}</span>
           </Link>
           <h1 className="mt-4 font-display text-[56px] leading-[0.92] tracking-tight md:text-[84px]">
-            {b.factory} <span className="italic text-muted">{b.version}</span>
+            {b.factory} <span className="italic text-muted">{ver(b.version)}</span>
           </h1>
           {b.guide && b.guide.entries.length > 0 && (
             <a href={b.guide.url} target="_blank" rel="noreferrer noopener" className="mt-4 inline-flex items-center gap-2 rounded-full border border-gold/40 bg-gold-soft px-3 py-1 text-[12.5px] text-gold hover:bg-gold/20">
@@ -166,7 +166,7 @@ export default function Build() {
               {b.siblings.map((s) => (
                 <Link key={s.id} to={`/build/${s.id}`} className={cx("inline-flex items-center gap-2 rounded-full border border-line py-1 pl-1 pr-3 text-[13px] transition-colors hover:border-line-strong", s.status !== "current" && "opacity-55")}>
                   <TierBadge tier={s.tier} size="sm" />
-                  {s.factory} {s.version}
+                  {s.factory} {ver(s.version)}
                 </Link>
               ))}
             </div>

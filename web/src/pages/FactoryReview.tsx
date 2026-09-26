@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { postJson, useApi, type AdminFactory, type AdminReference } from "../api";
 import { ErrorNote, PageLoading, SectionHead, StatusPill } from "../components/ui";
-import { cx } from "../lib/format";
+import { cx, ver } from "../lib/format";
 
 type Data = { factories: AdminFactory[]; blocked: string[]; statuses: string[] };
 
@@ -198,7 +198,7 @@ function FactoryCard({
                 <div className="flex flex-wrap gap-1.5">
                   {f.build_list.map((b) => (
                     <Link key={b.id} to={`/build/${b.id}`} className="rounded-full border border-line px-2.5 py-0.5 font-mono text-[11px] text-muted hover:text-paper">
-                      {b.reference_id} {b.version}
+                      {b.reference_id} {ver(b.version)}
                     </Link>
                   ))}
                 </div>

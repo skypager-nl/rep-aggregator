@@ -5,7 +5,7 @@ import { useApi, type Feed, type Meta } from "../api";
 import BuildCard from "../components/BuildCard";
 import { ErrorNote, PageLoading, SectionHead, Severity, SourceTag, Stat, StatusPill, TierBadge, TierMove } from "../components/ui";
 import WatchImage from "../components/WatchImage";
-import { ago, fmtDate, fmtInt, fmtScore } from "../lib/format";
+import { ago, fmtDate, fmtInt, fmtScore, ver } from "../lib/format";
 
 const EVENT_ICON: Record<string, typeof Sparkles> = { release: Sparkles, closure: FactoryIcon, rebrand: FactoryIcon, restock: PackageOpen, price: Tag, defect: TriangleAlert };
 
@@ -68,7 +68,7 @@ export default function Home() {
               <TierBadge tier={hero.tier} />
               <div className="text-sm">
                 <div className="leading-tight">
-                  {hero.factory} {hero.version} <span className="font-mono text-xs text-muted">{hero.reference_id}</span>
+                  {hero.factory} {ver(hero.version)} <span className="font-mono text-xs text-muted">{hero.reference_id}</span>
                 </div>
                 <div className="text-xs text-muted">Highest-rated current version · {fmtScore(hero.score)}</div>
               </div>
@@ -134,7 +134,7 @@ export default function Home() {
                     <span className="min-w-0 flex-1">
                       <span className="block text-[14.5px] leading-snug transition-colors group-hover:text-gold">{d.title}</span>
                       <span className="mt-1 block text-xs text-muted">
-                        {d.factory} {d.version} · <span className="font-mono">{d.reference_id}</span> · {d.reports} reports
+                        {d.factory} {ver(d.version)} · <span className="font-mono">{d.reference_id}</span> · {d.reports} reports
                       </span>
                     </span>
                     <StatusPill status={d.status} />
@@ -153,7 +153,7 @@ export default function Home() {
                   <Link to={`/build/${b.id}`} className="group flex items-center gap-3 py-3">
                     <TierBadge tier={b.tier} size="sm" />
                     <span className="flex-1 truncate text-[14.5px] transition-colors group-hover:text-gold">
-                      {b.factory} {b.version} <span className="font-mono text-xs text-muted">{b.reference_id}</span>
+                      {b.factory} {ver(b.version)} <span className="font-mono text-xs text-muted">{b.reference_id}</span>
                     </span>
                     <TierMove from={b.prev_tier} to={b.tier} />
                   </Link>

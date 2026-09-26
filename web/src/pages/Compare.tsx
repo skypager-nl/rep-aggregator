@@ -5,7 +5,7 @@ import { fetchJson, useApi, type BuildDetail, type BuildSummary, type Meta } fro
 import { PageLoading, ScoreBar, StatusPill, TierBadge } from "../components/ui";
 import WatchImage from "../components/WatchImage";
 import { compare, useCompare } from "../lib/compare";
-import { cx, fmtDate, fmtPrice, fmtScore, scoreColor } from "../lib/format";
+import { cx, fmtDate, fmtPrice, fmtScore, scoreColor, ver } from "../lib/format";
 
 export default function Compare() {
   const ids = useCompare();
@@ -27,7 +27,7 @@ export default function Compare() {
     const needle = q.toLowerCase();
     return (all ?? [])
       .filter((b) => !ids.includes(b.id))
-      .filter((b) => !needle || `${b.reference_id} ${b.reference_name} ${b.factory} ${b.version}`.toLowerCase().includes(needle))
+      .filter((b) => !needle || `${b.reference_id} ${b.reference_name} ${b.factory} ${ver(b.version)}`.toLowerCase().includes(needle))
       .slice(0, 12);
   }, [all, ids, q]);
 
@@ -84,7 +84,7 @@ export default function Compare() {
                 <TierBadge tier={b.tier} size="sm" />
                 <span className="font-mono text-xs text-muted">{b.reference_id}</span>
                 <span className="truncate">
-                  {b.factory} {b.version}
+                  {b.factory} {ver(b.version)}
                 </span>
                 {b.status !== "current" && <span className="ml-auto"><StatusPill status={b.status} /></span>}
               </button>
@@ -116,7 +116,7 @@ export default function Compare() {
                       <WatchImage photo={b.ref_photo} refId={b.reference_id} className="p-3 transition-transform duration-700 group-hover:scale-105" />
                     </div>
                     <div className="mt-3 font-display text-[26px] leading-tight group-hover:text-gold">
-                      {b.factory} <span className="text-muted">{b.version}</span>
+                      {b.factory} <span className="text-muted">{ver(b.version)}</span>
                     </div>
                     <div className="font-mono text-xs text-muted">{b.reference_id}</div>
                   </Link>
