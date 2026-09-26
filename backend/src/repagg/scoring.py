@@ -71,6 +71,22 @@ def baselines(conn: sqlite3.Connection) -> dict[str, tuple[float, float]]:
         return {}
 
 
+OLDER_RELEASE = 0.5   # a finding about V2 once V3 is out
+FIXED_DEFECT = 0.2    # a defect a later release fixed: history, barely counts
+
+
+def release_factor(release, current, defect_status, fixed_in, release_key) -> float:
+    """Findings count fully for the current release (or when no release was named); less for
+    superseded releases; defects fixed by a later release barely count."""
+    f = 1.0
+    if release and current and release_key(release) < release_key(current):
+        f *= OLDER_RELEASE
+    if defect_status == "fixed":
+        if not fixed_in or not current or release_key(fixed_in) <= release_key(current):
+            f *= FIXED_DEFECT
+    return f
+
+
 def tier_for(lower: float) -> str:
     return next(t for t, cutoff in TIERS if lower >= cutoff)
 
@@ -83,21 +99,27 @@ def compute(conn: sqlite3.Connection, as_of: date) -> int:
 
     rows = conn.execute(
         """
-        SELECT c.build_id, c.aspect, c.sentiment, c.evidence, p.posted_at,
+        SELECT c.build_id, c.aspect, c.sentiment, c.evidence, p.posted_at, c.release,
+               d.status AS defect_status, d.fixed_in_version,
                s.trust, COALESCE(a.reputation, 1.0) AS rep
         FROM claim c
         JOIN post p   ON p.id = c.post_id
         JOIN source s ON s.id = p.source_id
         LEFT JOIN author a ON a.id = p.author_id
+        LEFT JOIN defect d ON d.id = c.defect_id
         JOIN build b  ON b.id = c.build_id
         WHERE p.posted_at <= ? AND (b.released IS NULL OR b.released <= ?)
         """,
         (key + "T23:59:59", key),
     ).fetchall()
 
+    from .versions import current_releases, release_key
+
+    current = current_releases(conn)
     by_aspect: dict[str, dict[str, list[tuple[float, float]]]] = defaultdict(lambda: defaultdict(list))
     for r in rows:
         w = r["trust"] * r["rep"] * EVIDENCE_WEIGHT[r["evidence"]] * recency(r["posted_at"], as_of)
+        w *= release_factor(r["release"], current.get(r["build_id"]), r["defect_status"], r["fixed_in_version"], release_key)
         by_aspect[r["build_id"]][r["aspect"]].append((claim_value(r["sentiment"]), w))
 
     base = baselines(conn)

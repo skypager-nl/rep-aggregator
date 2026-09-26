@@ -5,7 +5,7 @@ import { useApi, type Meta, type ReferenceDetail } from "../api";
 import { Chip, ErrorNote, PageLoading, ScoreBar, SectionHead, StatusPill, TierBadge, TierMove } from "../components/ui";
 import WatchImage from "../components/WatchImage";
 import { compare } from "../lib/compare";
-import { cx, fmtDate, fmtPrice, fmtScore, scoreColor, ver } from "../lib/format";
+import { cx, fmtDate, fmtPrice, fmtScore, scoreColor } from "../lib/format";
 
 export default function Reference() {
   const { id } = useParams();
@@ -99,7 +99,7 @@ export default function Reference() {
                     <td className="py-4 font-mono text-sm text-faint">{b.rank}</td>
                     <td className="py-4">
                       <div className="font-display text-[21px] leading-tight">
-                        {b.factory} <span className="text-muted">{ver(b.version)}</span>
+                        {b.factory} <span className="text-muted">{(b.label ?? '')}</span>
                       </div>
                       <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
                         <span className="font-mono">{b.movement}</span>
@@ -152,7 +152,7 @@ export default function Reference() {
                   <td className="pr-3 text-left">
                     <Link to={`/build/${b.id}`} className="flex items-center gap-2 text-sm hover:text-gold">
                       <TierBadge tier={b.tier} size="sm" />
-                      {b.factory} <span className="text-muted">{ver(b.version)}</span>
+                      {b.factory} <span className="text-muted">{(b.label ?? '')}</span>
                     </Link>
                   </td>
                   {meta.aspects.map((a) => {

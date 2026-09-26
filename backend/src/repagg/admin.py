@@ -13,6 +13,11 @@ from . import db, scoring
 
 # Tables whose build_id column points at build.id (score/tier are rebuilt instead).
 BUILD_CHILDREN = ("claim", "defect", "photo", "price_point", "event", "qc_verdict")
+
+
+def _move_releases(conn: sqlite3.Connection, old: str, new: str) -> None:
+    conn.execute("UPDATE OR IGNORE release SET build_id = ? WHERE build_id = ?", (new, old))
+    conn.execute("DELETE FROM release WHERE build_id = ?", (old,))
 STATUSES = ("active", "closed", "rebranded", "unknown")
 
 
@@ -102,7 +107,7 @@ def discard(conn: sqlite3.Connection, factory_id: str) -> dict:
     ids = [r[0] for r in conn.execute("SELECT id FROM build WHERE factory_id = ?", (factory_id,))]
     marks = ",".join("?" * len(ids)) or "NULL"
     counts = {"builds": len(ids)}
-    for table in ("claim", "qc_verdict", "price_point", "event", "score", "tier"):
+    for table in ("claim", "qc_verdict", "price_point", "event", "score", "tier", "release"):
         counts[table] = conn.execute(f"DELETE FROM {table} WHERE build_id IN ({marks})", ids).rowcount
     conn.execute(f"UPDATE photo SET build_id = NULL WHERE build_id IN ({marks})", ids)
     counts["defect"] = conn.execute(f"DELETE FROM defect WHERE build_id IN ({marks})", ids).rowcount
@@ -129,6 +134,7 @@ def _rekey_build(conn: sqlite3.Connection, old: str, new: str) -> None:
             conn.execute("DELETE FROM defect WHERE id = ?", (d["id"],))
     for table in BUILD_CHILDREN:
         conn.execute(f"UPDATE {table} SET build_id = ? WHERE build_id = ?", (new, old))
+    _move_releases(conn, old, new)
     conn.execute("DELETE FROM score WHERE build_id = ?", (old,))
     conn.execute("DELETE FROM tier WHERE build_id = ?", (old,))
     conn.execute("DELETE FROM build WHERE id = ?", (old,))
@@ -144,7 +150,9 @@ def _drop_from_thread_builds(conn: sqlite3.Connection, removed: set[str]) -> Non
 
 
 def _build_id(factory_id: str, reference_id: str, version: str) -> str:
-    return f"{factory_id}-{re.sub(r'[^a-z0-9]+', '', reference_id.lower())}-{version.lower()}"
+    from .versions import build_id
+
+    return build_id(factory_id, reference_id, version or "")
 
 
 def _require(conn: sqlite3.Connection, factory_id: str) -> sqlite3.Row:
@@ -249,7 +257,7 @@ def discard_reference(conn: sqlite3.Connection, ref_id: str) -> dict:
     ids = [r[0] for r in conn.execute("SELECT id FROM build WHERE reference_id = ?", (ref_id,))]
     marks = ",".join("?" * len(ids)) or "NULL"
     counts = {"builds": len(ids)}
-    for table in ("claim", "qc_verdict", "price_point", "event", "score", "tier", "defect"):
+    for table in ("claim", "qc_verdict", "price_point", "event", "score", "tier", "defect", "release"):
         counts[table] = conn.execute(f"DELETE FROM {table} WHERE build_id IN ({marks})", ids).rowcount
     conn.execute(f"UPDATE photo SET build_id = NULL WHERE build_id IN ({marks})", ids)
     conn.execute(f"DELETE FROM build WHERE id IN ({marks})", ids)

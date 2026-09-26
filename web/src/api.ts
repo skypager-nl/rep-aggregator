@@ -37,6 +37,7 @@ export type Reference = {
 
 export type BuildLite = {
   id: string;
+  label: string;
   factory: string;
   factory_id: string;
   version: string;
@@ -77,6 +78,9 @@ export type BuildSummary = {
   photos: number;
   price: number | null;
   ref_photo: string | null;
+  label: string;
+  variant: string;
+  release: string | null;
   guide_rank: number | null;
   guide_quality: "nwbig" | "super" | null;
   qc_gl: number;
@@ -136,6 +140,7 @@ export type BuildDetail = BuildSummary & {
   photo_list: Photo[];
   prices: { dealer: string; price: number; observed_at: string }[];
   sources: Source[];
+  releases: { release: string; first_seen: string | null; note: string | null; fixed: string[]; findings: number }[];
   guide: { name: string; url: string; updated: string; entries: { model_text: string | null; movement: string | null; rank: number; quality: string | null; factory_raw: string; note: string | null }[] } | null;
   qc: QcVerdict[];
   qc_trend: { period: string; gl_rate: number; n: number }[];
@@ -183,6 +188,7 @@ export type Feed = {
   defects: (Pick<Defect, "id" | "title" | "aspect" | "severity" | "status" | "build_id" | "reports" | "last_seen"> & {
     reference_id: string;
     version: string;
+    label: string;
     factory: string;
   })[];
   movers: BuildSummary[];

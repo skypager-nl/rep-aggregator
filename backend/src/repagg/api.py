@@ -206,10 +206,26 @@ def _build_summaries(c: sqlite3.Connection, where: str = "1=1", params: tuple = 
     for r in c.execute(f"SELECT build_id, aspect, score, lower, n FROM score WHERE as_of = ? AND aspect != 'overall' AND build_id IN ({marks})", (latest, *ids)):
         aspects[r["build_id"]][r["aspect"]] = {"score": r["score"], "lower": r["lower"], "n": r["n"]}
     prices = _latest_prices(c, ids)
+    from .versions import current_releases, label
+
+    current = current_releases(c)
     for b in builds:
         b["aspects"] = aspects.get(b["id"], {})
         b["price"] = prices.get(b["id"])
+        b["variant"] = b["version"] or ""
+        b["release"] = current.get(b["id"])
+        b["label"] = label(b["release"], b["variant"])
     return builds
+
+
+def _label_rows(c: sqlite3.Connection, rows: list[dict], id_key: str = "build_id") -> list[dict]:
+    """Add the display label (known release + variant) to rows carrying a build id and its version."""
+    from .versions import current_releases, label
+
+    current = current_releases(c)
+    for r in rows:
+        r["label"] = label(current.get(r.get(id_key)), r.get("version") or "")
+    return rows
 
 
 def _latest_prices(c: sqlite3.Connection, ids: list[str]) -> dict[str, float]:
@@ -260,7 +276,7 @@ def references(c: sqlite3.Connection = Depends(conn)):
         by_ref[b["reference_id"]].append(b)
     for r in refs:
         builds = by_ref[r["id"]]
-        r["builds"] = [{k: b[k] for k in ("id", "factory", "factory_id", "version", "tier", "rank", "score", "status", "claims")} for b in builds]
+        r["builds"] = [{k: b[k] for k in ("id", "factory", "factory_id", "version", "label", "tier", "rank", "score", "status", "claims")} for b in builds]
         r["claims"] = sum(b["claims"] or 0 for b in builds)
     return refs
 
@@ -312,6 +328,13 @@ def build(build_id: str, c: sqlite3.Connection = Depends(conn)):
         (build_id,),
     )]
     out["photo_list"] = [dict(r) for r in c.execute("SELECT id, aspect, path, width, height FROM photo WHERE build_id = ?", (build_id,))]
+    from .versions import release_key
+
+    rel = [dict(r) for r in c.execute("SELECT release, first_seen, note FROM release WHERE build_id = ?", (build_id,))]
+    for r in rel:
+        r["fixed"] = [d["title"] for d in out["defects"] if d["status"] == "fixed" and d["fixed_in_version"] == r["release"]]
+        r["findings"] = c.execute("SELECT COUNT(*) FROM claim WHERE build_id = ? AND release = ?", (build_id, r["release"])).fetchone()[0]
+    out["releases"] = sorted(rel, key=lambda r: release_key(r["release"]))
     guide = db.get_meta(c, "guide_wmtb")
     out["guide"] = {**json.loads(guide), "entries": [dict(r) for r in c.execute(
         "SELECT model_text, movement, rank, quality, factory_raw, note FROM guide_entry WHERE build_id = ? ORDER BY rank", (build_id,))]} if guide else None
@@ -344,7 +367,7 @@ def build(build_id: str, c: sqlite3.Connection = Depends(conn)):
         (build_id,),
     )]
     out["siblings"] = [
-        {k: b[k] for k in ("id", "factory", "factory_id", "version", "tier", "rank", "score", "status")}
+        {k: b[k] for k in ("id", "factory", "factory_id", "version", "label", "tier", "rank", "score", "status")}
         for b in _build_summaries(c, "b.reference_id = ? AND b.id != ?", (out["reference_id"], build_id))
     ]
     return out
@@ -357,7 +380,7 @@ def factories(c: sqlite3.Connection = Depends(conn)):
         if alias != facs[fid]["name"]:
             facs[fid]["aliases"].append(alias)
     for b in _build_summaries(c):
-        facs[b["factory_id"]]["builds"].append({k: b[k] for k in ("id", "reference_id", "family", "version", "tier", "score", "status", "open_defects")})
+        facs[b["factory_id"]]["builds"].append({k: b[k] for k in ("id", "reference_id", "family", "version", "label", "tier", "score", "status", "open_defects")})
     for f in facs.values():
         current = [b for b in f["builds"] if b["status"] == "current" and b["score"] is not None]
         f["avg_score"] = round(sum(b["score"] for b in current) / len(current), 2) if current else None
@@ -402,6 +425,7 @@ def feed(c: sqlite3.Connection = Depends(conn)):
         ORDER BY e.occurred_at DESC LIMIT 24
         """
     )]
+    _label_rows(c, events)
     defects = [dict(r) for r in c.execute(
         """
         SELECT d.id, d.title, d.aspect, d.severity, d.status, d.build_id, b.reference_id, b.version, f.name AS factory,
@@ -414,6 +438,7 @@ def feed(c: sqlite3.Connection = Depends(conn)):
         """,
         (latest,),
     )]
+    _label_rows(c, defects)
     order = {t: i for i, (t, _) in enumerate(scoring.TIERS)}
     movers = [
         b for b in _build_summaries(c, "b.status = 'current'")
@@ -430,7 +455,8 @@ PIVOT_DIMS = {
     "reference": "b.reference_id",
     "family": "r.family",
     "aspect": "cl.aspect",
-    "version": "b.version",
+    "version": "COALESCE(NULLIF(b.version, ''), 'standard')",
+    "release": "COALESCE(cl.release, 'not stated')",
     "status": "b.status",
     "source": "s.name",
     "source_kind": "s.kind",

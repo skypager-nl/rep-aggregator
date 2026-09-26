@@ -128,6 +128,7 @@ def import_guide(conn: sqlite3.Connection, path: Path) -> dict:
     """Replace this guide's entries and baseline priors; create versions it names. Idempotent."""
     from . import scoring
     from .extract import _resolve_reference, _rescore
+    from .versions import add_release, ensure_build, split_label
 
     init_schema(conn)
     updated, entries = parse_sheet(path)
@@ -146,13 +147,9 @@ def import_guide(conn: sqlite3.Connection, path: Path) -> dict:
             skipped += 1
             continue
         for rid in ref_ids:
-            version = e["variant"] or "unspecified"
-            slug = re.sub(r"[^a-z0-9]+", "", rid.lower())
-            build_id = f"{factory_id}-{slug}-{re.sub(r'[^a-z0-9]+', '', version.lower())}"
-            conn.execute(
-                "INSERT OR IGNORE INTO build(id, reference_id, factory_id, version, movement, status) VALUES (?, ?, ?, ?, ?, 'current')",
-                (build_id, rid, factory_id, version, e["movement"] or None),
-            )
+            release, variant = split_label(e["variant"])
+            build_id = ensure_build(conn, factory_id, rid, variant, e["movement"])
+            add_release(conn, build_id, release, updated, "named in the WMTB guide")
             conn.execute(
                 "INSERT INTO guide_entry(guide, sheet_row, brand, family, model_text, reference_id, movement, rank, factory_raw, factory_id, build_id, quality, note) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

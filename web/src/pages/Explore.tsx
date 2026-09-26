@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router";
 import { useApi, type BuildSummary, type Meta } from "../api";
 import BuildCard from "../components/BuildCard";
 import { Chip, ErrorNote, PageLoading, ScoreBar, StatusPill, TierBadge } from "../components/ui";
-import { TIER_ORDER, cx, fmtDate, fmtPrice, fmtScore, ver } from "../lib/format";
+import { TIER_ORDER, cx, fmtDate, fmtPrice, fmtScore } from "../lib/format";
 
 const SORTS: Record<string, { label: string; key: (b: BuildSummary) => number }> = {
   lower: { label: "Tier strength", key: (b) => b.lower ?? -1 },
@@ -59,7 +59,7 @@ export default function Explore() {
       .filter((b) => !tiers.length || (b.tier && tiers.includes(b.tier)))
       .filter((b) => (b.score ?? 0) >= minScore)
       .filter((b) => !maxPrice || (b.price ?? 0) <= maxPrice)
-      .filter((b) => !needle || `${b.brand} ${b.reference_id} ${b.reference_name} ${b.factory} ${ver(b.version)} ${b.movement} ${b.family}`.toLowerCase().includes(needle))
+      .filter((b) => !needle || `${b.brand} ${b.reference_id} ${b.reference_name} ${b.factory} ${(b.label ?? '')} ${b.movement} ${b.family}`.toLowerCase().includes(needle))
       .sort((a, b) => SORTS[sort].key(b) - SORTS[sort].key(a));
   }, [data, q, status, brands, families, factories, tiers, minScore, maxPrice, sort]);
 
@@ -199,7 +199,7 @@ export default function Explore() {
                         </td>
                         <td className="py-3">
                           <Link to={`/build/${b.id}`} className="hover:text-gold">
-                            {b.factory} <span className="text-muted">{ver(b.version)}</span>
+                            {b.factory} <span className="text-muted">{(b.label ?? '')}</span>
                           </Link>
                         </td>
                         <td className="py-3">

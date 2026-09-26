@@ -273,3 +273,12 @@ CREATE TABLE IF NOT EXISTS web_session (
     created TEXT NOT NULL,
     expires TEXT NOT NULL
 );
+
+-- Release history per version (V2, V3, ... are improvements of the same product) ---
+CREATE TABLE IF NOT EXISTS release (
+    build_id   TEXT NOT NULL REFERENCES build(id),
+    release    TEXT NOT NULL,              -- 'V3'
+    first_seen TEXT,                       -- earliest date a source mentions it
+    note       TEXT,
+    PRIMARY KEY (build_id, release)
+);

@@ -28,7 +28,7 @@ MAX_CHARS_PER_CALL = 350_000  # ~90k tokens of thread text; longer threads are s
 ASPECT_IDS = [a for a, _, _ in scoring.ASPECTS]
 
 SYSTEM = """You analyse replica-watch forum and Reddit threads for a private buyer's database. Your output feeds \
-aggregate quality scores per build (reference x factory x version). Report only what the thread's \
+aggregate quality scores per version (a factory's replica of one reference). Report only what the thread's \
 posts actually support.
 
 How to read a thread
@@ -47,7 +47,11 @@ Versions (a factory's replica of one reference; the database calls them builds)
 "Speedmaster Moonwatch", "Nautilus 5711"). Use a listed nickname's reference when the post uses it.
 - Skip versions of watches that are not replicas of a genuine model (homages, DIY builds).
 - factory: the factory name as written (e.g. "Clean", "VSF", "RICH"); dealers are not factories.
-- version: "V1", "V2", ... if stated or clearly implied by date/features; otherwise "unspecified".
+- release: the factory's release number of this product ("V2", "V3", ...) only if the post states it or it is \
+unambiguous from the post's date and features; otherwise "". Releases are successive improvements of the \
+same version, not different versions.
+- variant: a named variant sold alongside the standard product, e.g. "Free Sprung", "Tungsten", "Weighted", \
+"Youth" (cheaper movement line); "" for the standard product. Never put a release number here.
 - movement: the clone calibre if mentioned (e.g. "VR3235", "JH3235"), else "".
 
 Claims (one per distinct opinion or observation about one aspect of one build in one post)
@@ -62,8 +66,8 @@ dimensions, "timegrapher" for timegrapher/rate data, otherwise "opinion".
 - Long reviews produce many claims (typically one per aspect covered). A one-line "looks great" \
 produces at most one low-information claim, or none.
 
-Defects: one entry per distinct flaw per build, with status "fixed" only if the thread says a later \
-version fixed it (then give fixed_in_version).
+Defects: one entry per distinct flaw per version, with status "fixed" only if the thread says a later \
+release fixed it (then give fixed_in_version, e.g. "V3").
 
 QC verdicts: for "GL or RL?"-style requests, report the community verdict for the post that asked: \
 GL (green light), RL (red light) or mixed, with counts of replies voting each way.
@@ -95,7 +99,7 @@ Prices: explicit USD prices per build from price lists or offers (post = the mes
 
 Claims: only when a message makes a concrete, checkable quality statement about one aspect (e.g. "V3 fixes the bezel alignment"); use evidence "photo" when QC photos are attached. Aspects: {aspects}. Sentiment -2..2, severity 0..3 as usual. Most dealer messages yield no claims.
 
-Defects: only flaws the dealer explicitly acknowledges, with status "fixed" if a new version fixes them.
+Defects: only flaws the dealer explicitly acknowledges, with status "fixed" if a new release fixes them.
 
 QC verdicts: none (return an empty list).
 
@@ -121,7 +125,7 @@ def schema(ref_ids: list[str] | None = None) -> dict:
     return obj({
         "summary": STR,
         "builds": {"type": "array", "items": obj({
-            "key": STR, "brand": STR, "reference": STR, "model": STR, "factory": STR, "version": STR, "movement": STR,
+            "key": STR, "brand": STR, "reference": STR, "model": STR, "factory": STR, "release": STR, "variant": STR, "movement": STR,
         })},
         "claims": {"type": "array", "items": obj({
             "build": STR, "post": INT, "aspect": _enum(ASPECT_IDS),
@@ -322,10 +326,16 @@ def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, model: str, repl
     if replace:
         conn.execute("DELETE FROM price_point WHERE source_id = ? AND thread_id = ?", (source_id, thread_id))
 
+    from .versions import add_release
+
     builds: dict[str, str] = {}
+    releases: dict[str, str | None] = {}
+    first_post = min((v[1] for v in post_ids.values()), default=None)
     for b in out["builds"]:
         if (build_id := _resolve_build(conn, b)):
             builds[b["key"]] = build_id
+            releases[b["key"]] = b.get("_release")
+            add_release(conn, build_id, b.get("_release"), (first_post or "")[:10] or None)
 
     defect_ids: dict[tuple[str, str], int] = {}
     for d in out["defects"]:
@@ -347,9 +357,9 @@ def _store(conn: sqlite3.Connection, t: sqlite3.Row, out: dict, model: str, repl
             defect_ids[key] = defect_id
         kind = "defect" if c["sentiment"] < 0 else "praise" if c["sentiment"] > 0 else "neutral"
         conn.execute(
-            "INSERT INTO claim(post_id, build_id, aspect, kind, sentiment, severity, evidence, defect_id, quote, model, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-            (post[0], build_id, c["aspect"], kind, c["sentiment"], c["severity"], c["evidence"], defect_id, model, now),
+            "INSERT INTO claim(post_id, build_id, aspect, kind, sentiment, severity, evidence, defect_id, quote, model, created_at, release) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+            (post[0], build_id, c["aspect"], kind, c["sentiment"], c["severity"], c["evidence"], defect_id, model, now, releases.get(c["build"])),
         )
         n_claims += 1
 
@@ -401,15 +411,15 @@ def _resolve_build(conn: sqlite3.Connection, b: dict) -> str | None:
         factory_id = re.sub(r"[^a-z0-9]+", "", name.lower()) or "unknown"
         conn.execute("INSERT OR IGNORE INTO factory(id, name, status, notes, needs_review) VALUES (?, ?, 'unknown', 'auto-added by extraction', 1)", (factory_id, name))
         conn.execute("INSERT OR IGNORE INTO factory_alias VALUES (?, ?)", (name, factory_id))
-    version = b["version"].strip().upper() if re.fullmatch(r"\s*[Vv]\d+(\.\d+)?\s*", b["version"]) else "unspecified"
-    build_id = f"{factory_id}-{_slug(reference_id)}-{version.lower()}"
-    conn.execute(
-        "INSERT OR IGNORE INTO build(id, reference_id, factory_id, version, movement, status) VALUES (?, ?, ?, ?, ?, 'current')",
-        (build_id, reference_id, factory_id, version, b["movement"] or None),
-    )
-    if b["movement"]:
-        conn.execute("UPDATE build SET movement = ? WHERE id = ? AND movement IS NULL", (b["movement"], build_id))
-    return build_id
+    from .versions import ensure_build, split_label
+
+    # Release numbers are history, not identity; a variant (Free Sprung, Tungsten...) is identity.
+    release, variant = split_label(b.get("release") or b.get("version"))
+    if b.get("variant"):
+        release2, variant = split_label(b["variant"])
+        release = release or release2
+    b["_release"] = release
+    return ensure_build(conn, factory_id, reference_id, variant, b.get("movement"))
 
 
 def _resolve_reference(conn: sqlite3.Connection, brand: str, ref: str, model: str, trusted: bool = False) -> str | None:
@@ -562,6 +572,7 @@ def delete_analysis(conn: sqlite3.Connection, source_id: str, thread_id: str) ->
     counts["defects"] = conn.execute("DELETE FROM defect WHERE id NOT IN (SELECT defect_id FROM claim WHERE defect_id IS NOT NULL)").rowcount
     orphan_builds = [r[0] for r in conn.execute(f"SELECT id FROM build WHERE id NOT IN ({evidence})")]
     bm = ",".join("?" * len(orphan_builds)) or "NULL"
+    conn.execute(f"DELETE FROM release WHERE build_id IN ({bm})", orphan_builds)
     conn.execute(f"DELETE FROM score WHERE build_id IN ({bm})", orphan_builds)
     conn.execute(f"DELETE FROM tier WHERE build_id IN ({bm})", orphan_builds)
     conn.execute(f"UPDATE photo SET build_id = NULL WHERE build_id IN ({bm})", orphan_builds)
@@ -607,6 +618,7 @@ def clean_slate(conn: sqlite3.Connection) -> dict:
         counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
     conn.execute("UPDATE photo SET build_id = NULL WHERE build_id IS NOT NULL")
     # Versions backed by the community guide are scaffolding too; everything else goes.
+    conn.execute("DELETE FROM release WHERE build_id NOT IN (SELECT build_id FROM baseline)")
     counts["versions"] = conn.execute("DELETE FROM build WHERE id NOT IN (SELECT build_id FROM baseline)").rowcount
     counts["factories"] = 0
     for (fid,) in conn.execute("SELECT id FROM factory WHERE needs_review = 1").fetchall():

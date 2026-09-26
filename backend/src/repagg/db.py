@@ -20,6 +20,7 @@ def connect(path=DB_PATH) -> sqlite3.Connection:
 
 # Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them.
 MIGRATIONS = {
+    "claim": {"release": "TEXT"},
     "post": {"thread_id": "TEXT", "page": "INTEGER", "number": "INTEGER", "reactions": "INTEGER", "is_starter": "INTEGER", "quotes": "TEXT"},
     "author": {"external_id": "TEXT", "reactions": "INTEGER", "banners": "TEXT"},
     "photo": {"url": "TEXT"},
@@ -44,6 +45,11 @@ def init(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS photo_post_url ON photo(post_id, url)")
     conn.execute("UPDATE factory SET needs_review = 1 WHERE needs_review IS NULL AND notes LIKE 'auto-added%'")
+    # One-time: release numbers move from the version label into the release history.
+    if conn.execute("SELECT 1 FROM build WHERE version = 'unspecified' OR version LIKE 'V%' OR version LIKE 'v%' LIMIT 1").fetchone():
+        from .versions import migrate
+
+        migrate(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS post_thread ON post(source_id, thread_id)")
     conn.commit()
 
