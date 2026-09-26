@@ -44,3 +44,10 @@ export function scoreColor(v: number | null | undefined, alpha = 1) {
 export function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(" ");
 }
+
+export const GUIDE_RANK = ["", "Best factory", "2nd best", "3rd best"];
+export const GUIDE_QUALITY: Record<string, string> = { nwbig: "NWBIG", super: "Super Rep" };
+export function guideLabel(rank: number | null | undefined, quality: string | null | undefined) {
+  if (!rank) return null;
+  return `${GUIDE_RANK[rank]}${quality ? ` · ${GUIDE_QUALITY[quality]}` : ""}`;
+}

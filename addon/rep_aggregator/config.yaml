@@ -1,5 +1,5 @@
 name: Rep Index
-version: "0.7.4"
+version: "0.8.0"
 slug: rep_aggregator
 description: Replica watch aggregator — builds, factories, defects and tiers
 arch:

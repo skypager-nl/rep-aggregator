@@ -2,6 +2,7 @@
 frontend uses is relative -- ingress mounts us under /api/hassio_ingress/<token>/."""
 
 import hmac
+import json
 import os
 import secrets
 import sqlite3
@@ -177,7 +178,7 @@ def _build_summaries(c: sqlite3.Connection, where: str = "1=1", params: tuple = 
                r.brand, r.family, r.name AS reference_name, r.dial_color, r.bezel_color, r.metal_color,
                (SELECT path FROM reference_photo rp WHERE rp.reference_id = r.id ORDER BY rp.view != 'front', rp.id LIMIT 1) AS ref_photo,
                t.tier, t.rank, t.controversy, pt.tier AS prev_tier,
-               so.score, so.lower, so.n AS claims,
+               so.score, so.lower, so.n AS claims, bl.rank AS guide_rank, bl.quality AS guide_quality,
                (SELECT COUNT(*) FROM defect d WHERE d.build_id = b.id AND d.status != 'fixed') AS open_defects,
                (SELECT COUNT(*) FROM photo ph WHERE ph.build_id = b.id) AS photos,
                (SELECT COUNT(*) FROM qc_verdict q WHERE q.build_id = b.id AND q.verdict = 'GL') AS qc_gl,
@@ -189,6 +190,7 @@ def _build_summaries(c: sqlite3.Connection, where: str = "1=1", params: tuple = 
         LEFT JOIN tier t   ON t.build_id = b.id AND t.as_of = ?
         LEFT JOIN tier pt  ON pt.build_id = b.id AND pt.as_of = ?
         LEFT JOIN score so ON so.build_id = b.id AND so.as_of = ? AND so.aspect = 'overall'
+        LEFT JOIN baseline bl ON bl.build_id = b.id
         WHERE {where}
         ORDER BY b.reference_id, t.rank
         """,
@@ -310,6 +312,9 @@ def build(build_id: str, c: sqlite3.Connection = Depends(conn)):
         (build_id,),
     )]
     out["photo_list"] = [dict(r) for r in c.execute("SELECT id, aspect, path, width, height FROM photo WHERE build_id = ?", (build_id,))]
+    guide = db.get_meta(c, "guide_wmtb")
+    out["guide"] = {**json.loads(guide), "entries": [dict(r) for r in c.execute(
+        "SELECT model_text, movement, rank, quality, factory_raw, note FROM guide_entry WHERE build_id = ? ORDER BY rank", (build_id,))]} if guide else None
     out["prices"] = [dict(r) for r in c.execute(
         "SELECT dealer, price_usd AS price, observed_at FROM price_point WHERE build_id = ? ORDER BY observed_at", (build_id,))]
     out["sources"] = [dict(r) for r in c.execute(

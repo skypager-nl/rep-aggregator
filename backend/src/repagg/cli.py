@@ -13,6 +13,8 @@ def main() -> None:
     sub.add_parser("init", help="create the database schema")
     sub.add_parser("demo", help="replace the database with synthetic demo data")
     sub.add_parser("seed-catalogue", help="add the built-in genuine reference catalogue (idempotent)")
+    gd = sub.add_parser("import-guide", help="import the WMTB community tiering sheet as the scoring baseline")
+    gd.add_argument("file")
     sub.add_parser("clean-slate", help="remove all analysis results; keep catalogue and collected material")
     sub.add_parser("purge-demo", help="remove all synthetic demo data, keep real captures and findings")
     sub.add_parser("score", help="recompute scores and tiers as of today")
@@ -102,6 +104,10 @@ def main() -> None:
         from .catalogue import seed
 
         print(f"catalogue: {seed(conn)} new references")
+    elif args.cmd == "import-guide":
+        from .guide import import_guide
+
+        print(import_guide(conn, Path(args.file)))
     elif args.cmd == "clean-slate":
         from .extract import clean_slate
 

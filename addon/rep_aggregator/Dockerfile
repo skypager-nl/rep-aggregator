@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir /app/backend
 COPY web/ /app/web/
 # Genuine reference photos (rolex.com), registered into /data on start.
 COPY genuine/ /app/genuine/
+# Community tiering guide(s): the scoring baseline, re-imported on start.
+COPY guides/ /app/guides/
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

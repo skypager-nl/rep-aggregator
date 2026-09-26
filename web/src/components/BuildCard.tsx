@@ -2,7 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import { motion } from "motion/react";
 import { Link } from "react-router";
 import type { BuildSummary } from "../api";
-import { fmtPrice, fmtScore } from "../lib/format";
+import { fmtPrice, fmtScore, guideLabel } from "../lib/format";
 import { Delta, ScoreBar, StatusPill, TierBadge } from "./ui";
 import WatchImage from "./WatchImage";
 
@@ -52,7 +52,7 @@ export default function BuildCard({ b, index = 0, showRef = true }: { b: BuildSu
                   <AlertTriangle size={12} /> {b.open_defects}
                 </span>
               )}
-              <span className="tnum">{b.claims} claims</span>
+              <span className="tnum">{b.claims ? `${b.claims} findings` : guideLabel(b.guide_rank, b.guide_quality) ? `Guide: ${guideLabel(b.guide_rank, b.guide_quality)}` : "no findings"}</span>
             </span>
           </div>
         </div>

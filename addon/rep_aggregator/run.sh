@@ -9,6 +9,7 @@ fi
 
 repagg seed-catalogue
 repagg import-photos /app/genuine
+for g in /app/guides/*.xlsx; do [ -f "$g" ] && repagg import-guide "$g"; done
 
 # Report whether the RWI proxy route is safe (contacts an IP-echo service only, never RWI).
 repagg egress-check || true

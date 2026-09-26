@@ -12,6 +12,8 @@ cp addon/rep_aggregator/* "$OUT"/
 rsync -a --exclude .venv --exclude __pycache__ backend/ "$OUT/backend/"
 cp -R web/dist "$OUT/web"
 mkdir -p "$OUT/genuine" && cp data/photos/genuine/* "$OUT/genuine/" 2>/dev/null || true
+# Community tiering sheet(s) used as the scoring baseline (kept out of git).
+mkdir -p "$OUT/guides" && cp fixtures/sheets/*.xlsx "$OUT/guides/" 2>/dev/null || true
 
 # HA OS's SSH app has no rsync; stream a tarball instead.
 ssh "$HOST" 'rm -rf /local_apps/rep_aggregator && mkdir -p /local_apps/rep_aggregator'

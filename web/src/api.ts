@@ -77,6 +77,8 @@ export type BuildSummary = {
   photos: number;
   price: number | null;
   ref_photo: string | null;
+  guide_rank: number | null;
+  guide_quality: "nwbig" | "super" | null;
   qc_gl: number;
   qc_rl: number;
   qc_mixed: number;
@@ -134,6 +136,7 @@ export type BuildDetail = BuildSummary & {
   photo_list: Photo[];
   prices: { dealer: string; price: number; observed_at: string }[];
   sources: Source[];
+  guide: { name: string; url: string; updated: string; entries: { model_text: string | null; movement: string | null; rank: number; quality: string | null; factory_raw: string; note: string | null }[] } | null;
   qc: QcVerdict[];
   qc_trend: { period: string; gl_rate: number; n: number }[];
   siblings: BuildLite[];

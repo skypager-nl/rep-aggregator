@@ -17,7 +17,7 @@ import {
 } from "../components/ui";
 import WatchImage from "../components/WatchImage";
 import { compare, useCompare } from "../lib/compare";
-import { cx, fmtDate, fmtPrice, fmtScore, scoreColor } from "../lib/format";
+import { cx, fmtDate, fmtPrice, fmtScore, guideLabel, scoreColor } from "../lib/format";
 
 const DEALER_COLORS = ["#c9a46a", "#7fb89a", "#8fa8d9", "#d9826f"];
 
@@ -109,6 +109,12 @@ export default function Build() {
           <h1 className="mt-4 font-display text-[56px] leading-[0.92] tracking-tight md:text-[84px]">
             {b.factory} <span className="italic text-muted">{b.version}</span>
           </h1>
+          {b.guide && b.guide.entries.length > 0 && (
+            <a href={b.guide.url} target="_blank" rel="noreferrer noopener" className="mt-4 inline-flex items-center gap-2 rounded-full border border-gold/40 bg-gold-soft px-3 py-1 text-[12.5px] text-gold hover:bg-gold/20">
+              Community guide: {guideLabel(b.guide_rank, b.guide_quality)}
+              <span className="text-faint">· {fmtDate(b.guide.updated)}</span>
+            </a>
+          )}
           <div className="mt-3 flex items-center gap-3">
             <StatusPill status={b.status} />
             <span className="font-mono text-xs text-muted">{b.movement}</span>
@@ -297,7 +303,25 @@ export default function Build() {
       {/* sources: links only — no posts, usernames or quotes */}
       <section className="mt-20">
         <SectionHead eyebrow={`${b.sources.length} thread${b.sources.length === 1 ? "" : "s"} analysed`} title="Sources" />
-        {!b.sources.length && <p className="text-sm text-muted">No analysed threads for this version yet.</p>}
+        {b.guide && b.guide.entries.length > 0 && (
+          <div className="border-b border-line py-4">
+            <a href={b.guide.url} target="_blank" rel="noreferrer noopener" className="group inline-flex items-baseline gap-2">
+              <span className="text-[15.5px] transition-colors group-hover:text-gold">{b.guide.name}</span>
+              <ExternalLink size={12} className="text-muted" />
+            </a>
+            <div className="mt-1 text-xs text-muted">Baseline · updated {fmtDate(b.guide.updated, "long")}</div>
+            <ul className="mt-2 space-y-1 text-[14px] text-paper/80">
+              {b.guide.entries.map((e, i) => (
+                <li key={i}>
+                  {guideLabel(e.rank, e.quality)} for {e.model_text || "this model"}
+                  {e.movement && <span className="text-muted"> ({e.movement})</span>}
+                  {e.note && <span className="text-muted"> — {e.note}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {!b.sources.length && !b.guide?.entries.length && <p className="text-sm text-muted">No analysed threads for this version yet.</p>}
         <ul>
           {b.sources.map((src) => (
             <li key={src.url} className="border-b border-line py-4 last:border-0">

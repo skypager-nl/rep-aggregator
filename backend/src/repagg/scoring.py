@@ -5,7 +5,9 @@ Each claim maps sentiment (-2..2) onto a 0..10 value and carries a weight:
     weight = source trust x author reputation x evidence x recency
 
 Scores are hierarchical Bayesian averages: a build's pooled score is shrunk
-toward PRIOR_MEAN, and each aspect is shrunk toward that pooled score. So a
+toward its prior -- the community guide's rating when the build is in the
+baseline (see guide.py), else PRIOR_MEAN -- and each aspect is shrunk toward
+that pooled score. So a
 build with three glowing posts can't outrank one with two hundred solid ones,
 and a rarely-discussed aspect inherits the build's overall reputation rather
 than a generic default. Tiers are
@@ -49,16 +51,24 @@ def recency(posted_at: str, as_of: date) -> float:
     return 0.5 ** (max(age, 0) / HALF_LIFE_DAYS)
 
 
-def shrunk(values: list[tuple[float, float]], prior: float = PRIOR_MEAN) -> tuple[float, float, int]:
-    """(value, weight) pairs -> (score, lower bound, n), shrunk toward `prior`."""
+def shrunk(values: list[tuple[float, float]], prior: float = PRIOR_MEAN, prior_weight: float = PRIOR_WEIGHT) -> tuple[float, float, int]:
+    """(value, weight) pairs -> (score, lower bound, n), shrunk toward `prior` held with `prior_weight`."""
     sw = sum(w for _, w in values)
     if sw == 0:
-        return prior, prior - Z * PRIOR_SD / math.sqrt(PRIOR_WEIGHT), 0
-    mean = (PRIOR_WEIGHT * prior + sum(v * w for v, w in values)) / (PRIOR_WEIGHT + sw)
-    var = (PRIOR_WEIGHT * PRIOR_SD**2 + sum(w * (v - mean) ** 2 for v, w in values)) / (PRIOR_WEIGHT + sw)
+        return prior, prior - Z * PRIOR_SD / math.sqrt(prior_weight), 0
+    mean = (prior_weight * prior + sum(v * w for v, w in values)) / (prior_weight + sw)
+    var = (prior_weight * PRIOR_SD**2 + sum(w * (v - mean) ** 2 for v, w in values)) / (prior_weight + sw)
     n_eff = sw**2 / sum(w * w for _, w in values)
-    se = math.sqrt(var / (PRIOR_WEIGHT + n_eff))
+    se = math.sqrt(var / (prior_weight + n_eff))
     return mean, mean - Z * se, len(values)
+
+
+def baselines(conn: sqlite3.Connection) -> dict[str, tuple[float, float]]:
+    """Guide-derived starting points per build: {build_id: (prior mean, prior weight)}."""
+    try:
+        return {r[0]: (r[1], r[2]) for r in conn.execute("SELECT build_id, prior_mean, prior_weight FROM baseline")}
+    except sqlite3.OperationalError:  # table not created yet
+        return {}
 
 
 def tier_for(lower: float) -> str:
@@ -90,13 +100,22 @@ def compute(conn: sqlite3.Connection, as_of: date) -> int:
         w = r["trust"] * r["rep"] * EVIDENCE_WEIGHT[r["evidence"]] * recency(r["posted_at"], as_of)
         by_aspect[r["build_id"]][r["aspect"]].append((claim_value(r["sentiment"]), w))
 
+    base = baselines(conn)
+    released = {r[0] for r in conn.execute("SELECT id FROM build WHERE released IS NULL OR released <= ?", (key,))}
+    for build_id in base:
+        if build_id in released:
+            by_aspect.setdefault(build_id, defaultdict(list))  # guide-rated versions score even without findings
+
     overall: dict[str, tuple[float, float, float]] = {}
     for build_id, aspects in by_aspect.items():
         everything = [vw for vals in aspects.values() for vw in vals]
-        pooled, _, _ = shrunk(everything)
+        prior, prior_w = base.get(build_id, (PRIOR_MEAN, PRIOR_WEIGHT))
+        pooled, pooled_lo, _ = shrunk(everything, prior=prior, prior_weight=prior_w)
         total = lower = 0.0
         for aspect, _, weight in ASPECTS:
-            s, lo, n = shrunk(aspects.get(aspect, []), prior=pooled)
+            vals = aspects.get(aspect, [])
+            # An aspect nobody commented on inherits the version's overall estimate and uncertainty.
+            s, lo, n = shrunk(vals, prior=pooled) if vals else (pooled, pooled_lo, 0)
             conn.execute("INSERT INTO score VALUES (?, ?, ?, ?, ?, ?)", (build_id, key, aspect, round(s, 3), round(lo, 3), n))
             total += weight * s
             lower += weight * lo

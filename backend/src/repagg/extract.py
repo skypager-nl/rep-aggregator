@@ -412,7 +412,7 @@ def _resolve_build(conn: sqlite3.Connection, b: dict) -> str | None:
     return build_id
 
 
-def _resolve_reference(conn: sqlite3.Connection, brand: str, ref: str, model: str) -> str | None:
+def _resolve_reference(conn: sqlite3.Connection, brand: str, ref: str, model: str, trusted: bool = False) -> str | None:
     """Reference number or nickname -> its id; else the brand's model -> the model-level entry.
     New reference numbers and new models are added and flagged for review; nothing is guessed."""
     from .brands import slug
@@ -439,15 +439,15 @@ def _resolve_reference(conn: sqlite3.Connection, brand: str, ref: str, model: st
         if not model_id:  # a model we don't know yet: add it, flagged
             bid = slug(brand)
             model_id = f"{bid}/{slug(family)}"
-            conn.execute("INSERT OR IGNORE INTO model(id, brand_id, name, needs_review) VALUES (?, ?, ?, 1)", (model_id, bid, family))
+            conn.execute("INSERT OR IGNORE INTO model(id, brand_id, name, needs_review) VALUES (?, ?, ?, ?)", (model_id, bid, family, 0 if trusted else 1))
             conn.execute("INSERT OR IGNORE INTO model_alias VALUES (?, ?)", (family, model_id))
     if ref and len(_norm_ref(ref)) >= 3:  # a new reference number: add it under its model
         ref_id = _norm_ref(ref)
         family = conn.execute("SELECT name FROM model WHERE id = ?", (model_id,)).fetchone()[0] if model_id else (model or brand)
         conn.execute(
             "INSERT OR IGNORE INTO reference(id, brand, family, name, kind, model_id, needs_review, notes) "
-            "VALUES (?, ?, ?, ?, 'reference', ?, 1, 'auto-added by extraction')",
-            (ref_id, brand, family, model or ref_id, model_id),
+            "VALUES (?, ?, ?, ?, 'reference', ?, ?, ?)",
+            (ref_id, brand, family, model or ref_id, model_id, 0 if trusted else 1, "from WMTB guide" if trusted else "auto-added by extraction"),
         )
         conn.executemany("INSERT OR IGNORE INTO reference_alias VALUES (?, ?)", [(a, ref_id) for a in {ref, ref_id} if a])
         return ref_id
@@ -558,7 +558,7 @@ def delete_analysis(conn: sqlite3.Connection, source_id: str, thread_id: str) ->
         "prices": conn.execute("DELETE FROM price_point WHERE source_id = ? AND thread_id = ?", (source_id, thread_id)).rowcount,
     }
     evidence = "SELECT build_id FROM claim UNION SELECT build_id FROM qc_verdict UNION SELECT build_id FROM price_point " \
-               "UNION SELECT build_id FROM event WHERE build_id IS NOT NULL"
+               "UNION SELECT build_id FROM event WHERE build_id IS NOT NULL UNION SELECT build_id FROM baseline"
     counts["defects"] = conn.execute("DELETE FROM defect WHERE id NOT IN (SELECT defect_id FROM claim WHERE defect_id IS NOT NULL)").rowcount
     orphan_builds = [r[0] for r in conn.execute(f"SELECT id FROM build WHERE id NOT IN ({evidence})")]
     bm = ",".join("?" * len(orphan_builds)) or "NULL"
@@ -606,7 +606,8 @@ def clean_slate(conn: sqlite3.Connection) -> dict:
     for table in ("claim", "qc_verdict", "event", "price_point", "score", "tier", "defect", "cost_log"):
         counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
     conn.execute("UPDATE photo SET build_id = NULL WHERE build_id IS NOT NULL")
-    counts["versions"] = conn.execute("DELETE FROM build").rowcount
+    # Versions backed by the community guide are scaffolding too; everything else goes.
+    counts["versions"] = conn.execute("DELETE FROM build WHERE id NOT IN (SELECT build_id FROM baseline)").rowcount
     counts["factories"] = 0
     for (fid,) in conn.execute("SELECT id FROM factory WHERE needs_review = 1").fetchall():
         conn.execute("DELETE FROM factory_alias WHERE factory_id = ?", (fid,))

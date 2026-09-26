@@ -34,6 +34,9 @@ MIGRATIONS = {
 
 def init(conn: sqlite3.Connection) -> None:
     conn.executescript(files("repagg").joinpath("schema.sql").read_text())
+    from .guide import SCHEMA as GUIDE_SCHEMA
+
+    conn.executescript(GUIDE_SCHEMA)
     for table, cols in MIGRATIONS.items():
         have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         for col, typ in cols.items():
