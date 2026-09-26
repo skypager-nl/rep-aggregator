@@ -28,6 +28,8 @@ export default function Captures() {
   const [status, setStatus] = useState("new");
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<Record<string, CapturedThread>>({});
+  const [failure, setFailure] = useState<string | null>(null);
+  const attempt = (p: Promise<unknown>) => p.then(() => setFailure(null)).catch((e: Error) => setFailure(`That didn’t go through: ${e.message}. Try again in a moment.`));
   const query = `captures?source=${source}&status=${status}&q=${encodeURIComponent(q)}&limit=100&n=${nonce}`;
   const { data, error } = useApi<{ threads: CapturedThread[]; total: number; log: CaptureLog[] }>(query);
   const { data: ex } = useApi<Extraction>(`extraction?n=${nonce}`);
@@ -37,10 +39,12 @@ export default function Captures() {
   const selected = Object.values(picked);
   const total = selected.reduce((sum, t) => sum + t.estimate_usd, 0);
   const queue = (items: CapturedThread[]) =>
-    postJson("analyse", { items: items.map((t) => [t.source_id, t.thread_id]) }).then(() => {
-      setPicked({});
-      refresh();
-    });
+    attempt(
+      postJson("analyse", { items: items.map((t) => [t.source_id, t.thread_id]) }).then(() => {
+        setPicked({});
+        refresh();
+      }),
+    );
 
   return (
     <div className="mx-auto max-w-[1360px] px-4 md:px-10">
@@ -58,6 +62,7 @@ export default function Captures() {
         )}
         {ex?.auto && <p className="mt-4 text-sm text-warn">Auto-analysis is on in the app options — new material is analysed without asking.</p>}
         {ex?.worker_error && <p className="mt-4 text-sm text-bad">Analysis worker: {ex.worker_error}</p>}
+        {failure && <p className="mt-4 text-sm text-bad">{failure}</p>}
       </header>
 
       <div className="grid gap-12 lg:grid-cols-[1fr_380px]">
@@ -118,10 +123,10 @@ export default function Captures() {
                   picked={!!picked[key(t)]}
                   onPick={(on) => setPicked((p) => (on ? { ...p, [key(t)]: t } : Object.fromEntries(Object.entries(p).filter(([k]) => k !== key(t)))))}
                   onQueue={() => queue([t])}
-                  onCancel={() => postJson("analyse/cancel", { items: [[t.source_id, t.thread_id]] }).then(refresh)}
+                  onCancel={() => attempt(postJson("analyse/cancel", { items: [[t.source_id, t.thread_id]] }).then(refresh))}
                   onDelete={() => {
                     if (confirm(`Delete the analysis of “${t.title}”? Its findings, prices and events are removed and scores recalculated as if it was never analysed. The collected posts stay, so you can analyse it again later.`))
-                      postJson(`captures/${encodeURIComponent(t.source_id)}/${encodeURIComponent(t.thread_id)}/delete-analysis`).then(refresh);
+                      attempt(postJson(`captures/${encodeURIComponent(t.source_id)}/${encodeURIComponent(t.thread_id)}/delete-analysis`).then(refresh));
                   }}
                 />
               ))}

@@ -154,20 +154,20 @@ class TelegramService:
     async def refresh_channels(self) -> int:
         """List broadcast channels the owner has joined. Groups and DMs are ignored."""
         c = await self._client()
-        conn = _conn()
-        n = 0
-        async for d in c.iter_dialogs():
+        found = []
+        async for d in c.iter_dialogs():  # network first, database afterwards
             ent = d.entity
-            if not (d.is_channel and getattr(ent, "broadcast", False)):
-                continue
+            if d.is_channel and getattr(ent, "broadcast", False):
+                found.append((ent.id, getattr(ent, "username", None), d.name))
+        conn = _conn()
+        for row in found:
             conn.execute(
                 "INSERT INTO tg_channel(id, username, title) VALUES (?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET username = excluded.username, title = excluded.title",
-                (ent.id, getattr(ent, "username", None), d.name),
+                row,
             )
-            n += 1
-        conn.commit()
         conn.close()
+        n = len(found)
         self.warmed = True
         return n
 
@@ -297,8 +297,11 @@ def _albums(msgs: list) -> list[list]:
 
 
 def _conn() -> sqlite3.Connection:
+    """Autocommit: Telegram work is mostly network I/O, and a write transaction must never stay open
+    while messages or photos download (that blocked every other writer)."""
     conn = db.connect(DB_PATH)
     conn.executescript(SCHEMA)
+    conn.isolation_level = None
     return conn
 
 
